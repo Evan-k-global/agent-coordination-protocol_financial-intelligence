@@ -359,6 +359,14 @@ This app runs as a single Node server that serves the UI + API on the same origi
 
 If you want a static front-end + separate API later, we can split the UI and server.
 
+### Render Quick Deploy
+
+1. Render → **New** → **Web Service** → connect this repo.
+2. **Build command:** `npm install && npm run build`
+3. **Start command:** `npm run start`
+4. Add environment variables from `.env.example` (use your local `.env` values for a working demo).
+5. Deploy and open the service URL.
+
 ## What Works Now
 
 - Marketplace UI with agent leaderboard and selection.
