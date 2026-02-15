@@ -68,6 +68,7 @@ const creditsMinDeposit = process.env.CREDITS_MIN_DEPOSIT_MINA
 const creditsTreasuryKey = process.env.CREDITS_TREASURY_PUBLIC_KEY || platformTreasuryKey;
 
 const dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+const bundledDataDir = path.join(process.cwd(), 'data');
 const agentsPath = path.join(dataDir, 'agents.json');
 const edgarPath = path.join(dataDir, 'edgar_sample.json');
 const sp500Path = path.join(dataDir, 'sp500_sample.json');
@@ -1729,6 +1730,34 @@ async function writeEdgarCache<T>(key: string, payload: T) {
   await fs.mkdir(edgarCacheDir, { recursive: true });
   const filePath = path.join(edgarCacheDir, `${key}.json`);
   await fs.writeFile(filePath, JSON.stringify(payload, null, 2));
+}
+
+async function ensureSeedData() {
+  try {
+    await fs.mkdir(dataDir, { recursive: true });
+    if (dataDir === bundledDataDir) return;
+    const seedFiles = ['agents.json', 'crypto_top500.json', 'edgar_sample.json', 'macro_sample.json', 'sp500_sample.json'];
+    await Promise.all(
+      seedFiles.map(async (file) => {
+        const target = path.join(dataDir, file);
+        try {
+          await fs.access(target);
+          return;
+        } catch {
+          // continue to seed
+        }
+        const source = path.join(bundledDataDir, file);
+        try {
+          const raw = await fs.readFile(source, 'utf-8');
+          await fs.writeFile(target, raw);
+        } catch {
+          // ignore missing bundled file
+        }
+      })
+    );
+  } catch (err) {
+    console.warn('Seed data init failed:', err instanceof Error ? err.message : err);
+  }
 }
 
 async function getTickerCikMap(): Promise<Map<string, string>> {
@@ -4142,5 +4171,6 @@ app.listen(port, () => {
   console.log(`Zeko AI Marketplace running on http://localhost:${port}`);
 });
 
+ensureSeedData();
 ensureMassiveFlatfilesFresh();
 ensureSymbolIndexFresh();
