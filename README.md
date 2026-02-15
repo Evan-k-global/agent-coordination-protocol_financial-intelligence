@@ -367,6 +367,16 @@ If you want a static front-end + separate API later, we can split the UI and ser
 4. Add environment variables from `.env.example` (use your local `.env` values for a working demo).
 5. Deploy and open the service URL.
 
+### Render Persistent Data (Recommended)
+
+To preserve requests, merkle roots, credits ledger, and price caches across restarts:
+
+1. In Render, add a **Persistent Disk** (e.g. 1–5 GB).
+2. Mount it at: `/var/data`
+3. Set env var: `DATA_DIR=/var/data`
+
+This keeps CAGR, verified status, and credits history from resetting on deploys/restarts.
+
 ## What Works Now
 
 - Marketplace UI with agent leaderboard and selection.

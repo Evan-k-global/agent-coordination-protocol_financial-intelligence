@@ -67,7 +67,7 @@ const creditsMinDeposit = process.env.CREDITS_MIN_DEPOSIT_MINA
   : 1;
 const creditsTreasuryKey = process.env.CREDITS_TREASURY_PUBLIC_KEY || platformTreasuryKey;
 
-const dataDir = path.join(process.cwd(), 'data');
+const dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 const agentsPath = path.join(dataDir, 'agents.json');
 const edgarPath = path.join(dataDir, 'edgar_sample.json');
 const sp500Path = path.join(dataDir, 'sp500_sample.json');
@@ -2986,13 +2986,34 @@ async function simulateModel({ agentId, prompt, requestId }: { agentId: string; 
           // ignore price failures
         }
 
+        if (!hasSecData) {
+          try {
+            const sample = await readJson<Record<string, any>>(edgarPath, {});
+            const fallback = sample?.[symbol];
+            if (fallback) {
+              profitGrowth = typeof fallback.profitGrowth === 'number' ? fallback.profitGrowth : profitGrowth;
+              revenueGrowth = typeof fallback.revenueGrowth === 'number' ? fallback.revenueGrowth : revenueGrowth;
+              latestFiling = fallback.latestFiling || latestFiling;
+              highlightsLocal = Array.isArray(fallback.highlights) ? fallback.highlights : highlightsLocal;
+              profitSource = 'EDGAR sample (fallback)';
+              revenueSource = 'EDGAR sample (fallback)';
+              hasSecData = true;
+            }
+          } catch {
+            // ignore sample fallback failures
+          }
+        }
+
         if (!hasSecData || !hasPrice) {
           const cachedKey = `last_edgar_${symbol.toUpperCase()}`;
           const cached = await readEdgarCache<any>(cachedKey, Infinity);
           if (cached) {
             return cached;
           }
-          throw new Error('EDGAR Scout requires live SEC data and price series.');
+          const missing: string[] = [];
+          if (!hasSecData) missing.push('SEC data');
+          if (!hasPrice) missing.push('price series');
+          throw new Error(`EDGAR Scout requires ${missing.join(' and ')}.`);
         }
         const payload = {
           symbol,
