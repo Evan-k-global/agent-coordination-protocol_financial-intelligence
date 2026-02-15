@@ -640,11 +640,11 @@ async function createRequest() {
   console.log('Timing: /api/intent ms', Math.round(performance.now() - t0));
 
   let intent;
+  const rawIntent = await intentRes.text();
   try {
-    intent = await intentRes.json();
+    intent = JSON.parse(rawIntent);
   } catch (parseErr) {
-    const text = await intentRes.text();
-    throw new Error(`Intent response not JSON: ${text.slice(0, 120)}`);
+    throw new Error(`Intent response not JSON: ${rawIntent.slice(0, 120)}`);
   }
   if (!intentRes.ok) {
     throw new Error(intent.error || 'Intent creation failed');
