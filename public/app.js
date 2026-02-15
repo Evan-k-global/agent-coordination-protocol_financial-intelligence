@@ -625,6 +625,7 @@ async function createRequest() {
   proofPreview.textContent = '—';
   txHashEl.textContent = '—';
   requestIdEl.textContent = '—';
+  const t0 = performance.now();
 
   const intentRes = await fetch('/api/intent', {
     method: 'POST',
@@ -636,13 +637,18 @@ async function createRequest() {
       useCredits: creditsMode
     })
   });
+  console.log('Timing: /api/intent ms', Math.round(performance.now() - t0));
 
-  if (!intentRes.ok) {
-    const err = await intentRes.json();
-    throw new Error(err.error || 'Intent creation failed');
+  let intent;
+  try {
+    intent = await intentRes.json();
+  } catch (parseErr) {
+    const text = await intentRes.text();
+    throw new Error(`Intent response not JSON: ${text.slice(0, 120)}`);
   }
-
-  const intent = await intentRes.json();
+  if (!intentRes.ok) {
+    throw new Error(intent.error || 'Intent creation failed');
+  }
   lastPayload = intent.payload;
   lastRequestId = intent.requestId;
   lastAccessToken = intent.accessToken || null;
@@ -667,6 +673,7 @@ async function createRequest() {
   }
 
   if (creditsMode) {
+    const tCredits = performance.now();
     const spendAmount = Number(intent.priceMina || 0);
     const spendRes = await fetch('/api/credits/spend-intent', {
       method: 'POST',
@@ -677,16 +684,19 @@ async function createRequest() {
         amountMina: spendAmount
       })
     });
+    console.log('Timing: /api/credits/spend-intent ms', Math.round(performance.now() - tCredits));
     if (!spendRes.ok) {
       const err = await spendRes.json();
       throw new Error(err.error || 'Credits spend intent failed');
     }
     const spendIntent = await spendRes.json();
+    const tRelayer = performance.now();
     const creditsTxRes = await fetch('/api/credits-spend-submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ payload: spendIntent.payload })
     });
+    console.log('Timing: /api/credits-spend-submit ms', Math.round(performance.now() - tRelayer));
     if (!creditsTxRes.ok) {
       const err = await creditsTxRes.json();
       throw new Error(err.error || 'Credits spend submit failed');
@@ -705,11 +715,13 @@ async function createRequest() {
     return;
   }
 
+  const tTxBuild = performance.now();
   const txRes = await fetch('/api/tx', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ payload: lastPayload, feePayer: walletPublicKey })
   });
+  console.log('Timing: /api/tx ms', Math.round(performance.now() - tTxBuild));
 
   if (!txRes.ok) {
     const err = await txRes.json();
@@ -719,13 +731,17 @@ async function createRequest() {
   const txData = await txRes.json();
   let hash = 'submitted';
   if (metaSnapConnected) {
+    const tSnap = performance.now();
     const snapResult = await sendTxWithMetaMaskSnap(txData);
+    console.log('Timing: snap sendTx ms', Math.round(performance.now() - tSnap));
     hash = snapResult?.hash || 'submitted';
   } else {
+    const tAuro = performance.now();
     const sent = await window.mina.sendTransaction({
       transaction: txData.tx,
       feePayer: { fee: txData.fee }
     });
+    console.log('Timing: Auro sendTransaction ms', Math.round(performance.now() - tAuro));
     hash = sent?.hash || 'submitted';
   }
   txHashEl.textContent = hash;
@@ -828,6 +844,9 @@ attestOutputButton.addEventListener('click', async () => {
   if (!lastOutputProof) {
     alert('No output proof available yet.');
     return;
+  }
+  if (attestHint) {
+    attestHint.textContent = 'Generating attestation transaction...';
   }
   if (creditsMode) {
     const txRes = await fetch('/api/output-attest-submit', {
