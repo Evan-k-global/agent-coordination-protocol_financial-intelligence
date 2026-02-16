@@ -127,6 +127,7 @@ http://localhost:8088/execute
 ## Admin Controls (Demo)
 
 For the demo, the platform can disable abusive or non‑compliant agents via an admin token.
+In production, governance can be decentralized or federated; this admin veto is demo‑only.
 
 Set `ADMIN_TOKEN` in your environment, then call:
 
