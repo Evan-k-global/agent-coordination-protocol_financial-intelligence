@@ -3318,6 +3318,29 @@ app.post('/api/admin/agents/:id/disable', async (req, res) => {
   }
 });
 
+app.post('/api/admin/seed-requests', async (req, res) => {
+  try {
+    const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!adminToken || token !== adminToken) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    await ensureSeedData();
+    const requestsFile = path.join(dataDir, 'requests.json');
+    let count = 0;
+    try {
+      const raw = await fs.readFile(requestsFile, 'utf-8');
+      const parsed = JSON.parse(raw);
+      count = Array.isArray(parsed?.requests) ? parsed.requests.length : 0;
+    } catch {
+      // ignore
+    }
+    res.json({ ok: true, requestsSeeded: count });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Seed requests failed';
+    res.status(400).json({ error: message });
+  }
+});
+
 
 app.get('/api/leaderboard', async (_req, res) => {
   const data = await readJson<{ agents: any[] }>(agentsPath, { agents: [] });

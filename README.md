@@ -131,6 +131,7 @@ For the demo, the platform can disable abusive or non‑compliant agents via an 
 Set `ADMIN_TOKEN` in your environment, then call:
 
 - `POST /api/admin/agents/:id/disable` (Body: `{ "reason": "..." }`)
+- `POST /api/admin/seed-requests` (re-seed demo requests if the data directory is empty)
 
 Include `Authorization: Bearer <ADMIN_TOKEN>` in the request.
 
