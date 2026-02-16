@@ -1763,7 +1763,19 @@ async function ensureSeedData() {
         const target = path.join(dataDir, file === 'requests_seed.json' ? 'requests.json' : file);
         try {
           await fs.access(target);
-          return;
+          if (file === 'requests_seed.json') {
+            try {
+              const existing = await fs.readFile(target, 'utf-8');
+              const parsed = JSON.parse(existing);
+              if (Array.isArray(parsed?.requests) && parsed.requests.length > 0) {
+                return;
+              }
+            } catch {
+              // fall through to seed
+            }
+          } else {
+            return;
+          }
         } catch {
           // continue to seed
         }
