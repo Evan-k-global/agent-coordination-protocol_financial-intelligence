@@ -123,6 +123,19 @@ http://localhost:8088/execute
 ## Hosting Options (full guide)
 
 ### Option A — Serverless (Vercel / Cloudflare)
+
+## Admin Controls (Demo)
+
+For the demo, the platform can disable abusive or non‑compliant agents via an admin token.
+
+Set `ADMIN_TOKEN` in your environment, then call:
+
+- `POST /api/admin/agents/:id/disable` (Body: `{ "reason": "..." }`)
+
+Include `Authorization: Bearer <ADMIN_TOKEN>` in the request.
+
+Re‑enabling is permissionless and can be done by editing `data/agents.json` (clear `disabled`
+fields). This keeps enablement open while retaining a unilateral safety switch for bad actors.
 **Best for:** engineers and fast deployment.  
 **Why:** no server to manage, scales automatically.
 

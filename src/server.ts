@@ -52,6 +52,7 @@ const ipfsGateway = process.env.IPFS_GATEWAY || '';
 const platformTreasuryKey =
   process.env.PLATFORM_TREASURY_PUBLIC_KEY || 'B62qqpyJPDGci2uxpapnXQmrFr77b47wRx1v2GDRnAHMUFJFjJv4YPb';
 const platformFeeMina = process.env.PLATFORM_FEE_MINA ? Number(process.env.PLATFORM_FEE_MINA) : 0.01;
+const adminToken = process.env.ADMIN_TOKEN || '';
 
 function getRelayerPublicKey(): string | null {
   const sponsorKey = getSecret('SPONSOR_PRIVATE_KEY');
@@ -3229,10 +3230,11 @@ app.get('/api/config', (_req, res) => {
 
 app.get('/api/agents', async (_req, res) => {
   const data = await readJson<{ agents: any[] }>(agentsPath, { agents: [] });
+  const activeAgents = data.agents.filter((agent) => !agent.disabled);
   const requestsStore = await readJson<{ requests: any[] }>(requestsPath, { requests: [] });
   const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const agents = await Promise.all(
-    data.agents.map(async (agent) => {
+    activeAgents.map(async (agent) => {
       const defaultSources: Record<string, string> = {
         'alpha-signal': 'S&P 500 price momentum + earnings drift',
         'edgar-scout': 'SEC EDGAR filings + price series',
@@ -3291,6 +3293,31 @@ app.get('/api/agents', async (_req, res) => {
   );
   res.json({ agents });
 });
+
+app.post('/api/admin/agents/:id/disable', async (req, res) => {
+  try {
+    const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!adminToken || token !== adminToken) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    const agentId = req.params.id;
+    const { reason } = req.body ?? {};
+    const data = await readJson<{ agents: any[] }>(agentsPath, { agents: [] });
+    const agent = data.agents.find((entry) => entry.id === agentId);
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+    agent.disabled = true;
+    agent.disabledReason = reason || 'Policy violation';
+    agent.disabledAt = new Date().toISOString();
+    await writeJson(agentsPath, data);
+    res.json({ ok: true, agentId, disabled: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Disable failed';
+    res.status(400).json({ error: message });
+  }
+});
+
 
 app.get('/api/leaderboard', async (_req, res) => {
   const data = await readJson<{ agents: any[] }>(agentsPath, { agents: [] });
@@ -3722,6 +3749,9 @@ app.post('/api/intent', async (req, res) => {
     const data = await readJson<{ agents: any[] }>(agentsPath, { agents: [] });
     const agent = data.agents.find((entry) => entry.id === agentId);
     if (!agent) throw new Error('Unknown agent');
+    if (agent.disabled) {
+      throw new Error('Agent is disabled by the platform');
+    }
 
     // Optional endpoint-driven pricing (best-effort, fallback to default fee)
     let quotedPrice: number | null = null;
