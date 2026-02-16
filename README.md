@@ -383,6 +383,14 @@ This keeps CAGR, verified status, and credits history from resetting on deploys/
 - Use a larger Render instance if tx build times are high.
 - To log server-side timings, set `DEBUG_TX_TIMING=true`.
 
+**Observed tx build times (demo benchmarks)**
+- Render Basic (2 vCPU): ~45s `/api/tx`
+- Render Performance (16 vCPU): ~20s `/api/tx`
+- Local Mac M3: ~15s `/api/tx`
+
+These are demo observations to show that the app is cheap to host and can be accelerated by
+increasing CPU. Wallet proving time is separate and depends on the user’s device and network.
+
 ## What Works Now
 
 - Marketplace UI with agent leaderboard and selection.
