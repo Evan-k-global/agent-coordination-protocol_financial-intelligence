@@ -157,6 +157,8 @@ function verifySignedMessage(publicKeyBase58: string, signatureBase58: string, m
   return signature.verify(publicKey, fields).toBoolean();
 }
 let contractCompiled = false;
+const precompileZkapp = process.env.PRECOMPILE_ZKAPP === 'true';
+const debugTxTiming = process.env.DEBUG_TX_TIMING === 'true';
 const stakeRequired = 0;
 const tzekoTokenAddress =
   process.env.TZEKO_TOKEN_ADDRESS ?? 'B62qjUhPDbMskxMduyzkyGnK6LZwHksuuYPRjyF4owJM7UWLGJynN36';
@@ -907,7 +909,11 @@ async function getCurrentNullifierRoot() {
 
 async function ensureContractCompiled() {
   if (!contractCompiled) {
+    const start = Date.now();
     await AgentRequestContract.compile();
+    if (debugTxTiming) {
+      console.log(`Contract compiled in ${Date.now() - start}ms`);
+    }
     contractCompiled = true;
   }
 }
@@ -989,6 +995,7 @@ async function buildUnsignedTx(payload: {
   priceMina?: number;
   treasuryPublicKey?: string | null;
 }, feePayer: string) {
+  const start = debugTxTiming ? Date.now() : 0;
   const network = getNetwork();
   if (!network.graphql) {
     throw new Error('ZEKO_GRAPHQL env var not set');
@@ -1098,6 +1105,9 @@ async function buildUnsignedTx(payload: {
 
   await tx.prove();
   const txJson = tx.toJSON() as any;
+  if (debugTxTiming) {
+    console.log(`buildUnsignedTx total ${Date.now() - start}ms`);
+  }
   return { tx: txJson, fee, networkId: network.networkId };
 }
 
@@ -1222,6 +1232,7 @@ async function buildUnsignedOutputTx(payload: {
   signature: unknown;
   merkleRoot: string;
 }, feePayer: string) {
+  const start = debugTxTiming ? Date.now() : 0;
   const network = getNetwork();
   if (!network.graphql) {
     throw new Error('ZEKO_GRAPHQL env var not set');
@@ -1300,6 +1311,9 @@ async function buildUnsignedOutputTx(payload: {
 
   await tx.prove();
   const txJson = tx.toJSON() as any;
+  if (debugTxTiming) {
+    console.log(`buildUnsignedOutputTx total ${Date.now() - start}ms`);
+  }
   return { tx: txJson, fee, networkId: network.networkId };
 }
 
@@ -4174,3 +4188,8 @@ app.listen(port, () => {
 ensureSeedData();
 ensureMassiveFlatfilesFresh();
 ensureSymbolIndexFresh();
+if (precompileZkapp) {
+  ensureContractCompiled().catch((err) => {
+    console.warn('Precompile failed:', err instanceof Error ? err.message : err);
+  });
+}

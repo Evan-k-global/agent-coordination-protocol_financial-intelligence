@@ -377,6 +377,12 @@ To preserve requests, merkle roots, credits ledger, and price caches across rest
 
 This keeps CAGR, verified status, and credits history from resetting on deploys/restarts.
 
+### Performance Tips (Render)
+
+- Set `PRECOMPILE_ZKAPP=true` to compile circuits once at startup (reduces first-request latency).
+- Use a larger Render instance if tx build times are high.
+- To log server-side timings, set `DEBUG_TX_TIMING=true`.
+
 ## What Works Now
 
 - Marketplace UI with agent leaderboard and selection.
