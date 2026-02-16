@@ -402,6 +402,12 @@ increasing CPU. Wallet proving time is separate and depends on the user’s devi
 Tx build time shows diminishing returns with more CPU cores. A simple fit is:
 `time ≈ a / (vCPU^0.6)` (sub-linear scaling).
 
+**Build minutes vs runtime**
+Render build minutes only affect deployment time, not runtime performance. In our tests,
+Starter build minutes took ~4 minutes per deploy, while Performance build minutes took ~40 seconds.
+If you deploy or test frequently, Performance build minutes are worth it; runtime speed is
+controlled by the service instance tier.
+
 ## What Works Now
 
 - Marketplace UI with agent leaderboard and selection.
