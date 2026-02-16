@@ -12,6 +12,7 @@ data/*
 !data/edgar_sample.json
 !data/macro_sample.json
 !data/sp500_sample.json
+!data/requests_seed.json
 
 # build artifacts / caches
 data/edgar_cache/

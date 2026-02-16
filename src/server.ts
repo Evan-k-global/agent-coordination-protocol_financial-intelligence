@@ -1750,10 +1750,17 @@ async function ensureSeedData() {
   try {
     await fs.mkdir(dataDir, { recursive: true });
     if (dataDir === bundledDataDir) return;
-    const seedFiles = ['agents.json', 'crypto_top500.json', 'edgar_sample.json', 'macro_sample.json', 'sp500_sample.json'];
+    const seedFiles = [
+      'agents.json',
+      'crypto_top500.json',
+      'edgar_sample.json',
+      'macro_sample.json',
+      'sp500_sample.json',
+      'requests_seed.json'
+    ];
     await Promise.all(
       seedFiles.map(async (file) => {
-        const target = path.join(dataDir, file);
+        const target = path.join(dataDir, file === 'requests_seed.json' ? 'requests.json' : file);
         try {
           await fs.access(target);
           return;
@@ -3142,7 +3149,7 @@ async function simulateModel({ agentId, prompt, requestId }: { agentId: string; 
       const macroBias = goldTrend === 'up' ? 0.55 : 0.45;
       const macroScore = Math.min(1, Math.max(0, macroBias + sectorCorr * 0.3));
       const score = Math.min(1, Math.max(0, 0.65 * macroScore + 0.35 * priceMomentum));
-      const action = forcedAction ?? classifyAction(score, 0.08);
+      const action = forcedAction ?? classifyAction(score, 0.05);
       return {
         symbol,
         action,
