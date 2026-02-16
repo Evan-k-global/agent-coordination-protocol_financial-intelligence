@@ -4183,6 +4183,7 @@ app.post('/api/requests/:id/reveal', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Zeko AI Marketplace running on http://localhost:${port}`);
+  console.log(`PRECOMPILE_ZKAPP=${String(precompileZkapp)} DEBUG_TX_TIMING=${String(debugTxTiming)}`);
 });
 
 ensureSeedData();
