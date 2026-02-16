@@ -384,12 +384,18 @@ This keeps CAGR, verified status, and credits history from resetting on deploys/
 - To log server-side timings, set `DEBUG_TX_TIMING=true`.
 
 **Observed tx build times (demo benchmarks)**
-- Render Basic (2 vCPU): ~45s `/api/tx`
-- Render Performance (16 vCPU): ~20s `/api/tx`
+- Render Standard (1 vCPU, 2 GB): ~45s `/api/tx`
+- Render Pro Plus (4 vCPU, 8 GB): ~20s `/api/tx`
+- Render Pro Max (4 vCPU, 16 GB): ~20s `/api/tx`
+- Render Pro Ultra (8 vCPU, 32 GB): ~13s `/api/tx` (≈ $450/mo)
 - Local Mac M3: ~15s `/api/tx`
 
 These are demo observations to show that the app is cheap to host and can be accelerated by
 increasing CPU. Wallet proving time is separate and depends on the user’s device and network.
+
+**Rough scaling curve (CPU-bound)**
+Tx build time shows diminishing returns with more CPU cores. A simple fit is:
+`time ≈ a / (vCPU^0.6)` (sub-linear scaling).
 
 ## What Works Now
 
