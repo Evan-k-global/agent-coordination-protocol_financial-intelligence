@@ -12,7 +12,7 @@ with a Merkle root and an oracle signature, leaving room for multiple competing 
 - **Composable, multi-output responses:** Agents can return structured JSON across multiple symbols.
 - **Neutral settlement:** On-chain payments reduce reliance on centralized processors.
 
-## How It Works (Plain English)
+## How It Works
 
 This product is a **verified signal marketplace**. Models run **off-chain** (for privacy and speed),
 while Zeko stores **hashes and attestations** that make the marketplace trustworthy.
@@ -41,6 +41,11 @@ cp .env.example .env
 npm install
 npm run dev
 ```
+
+## Wallet + Faucet
+
+- Auro Wallet: [Get Auro](https://www.aurowallet.com/)
+- Zeko Testnet Faucet: [faucet.zeko.io](https://faucet.zeko.io/)
 
 ## Registering Your Model (Step‑by‑Step)
 
