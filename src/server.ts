@@ -160,6 +160,22 @@ function verifySignedMessage(publicKeyBase58: string, signatureBase58: string, m
 let contractCompiled = false;
 const precompileZkapp = process.env.PRECOMPILE_ZKAPP === 'true';
 const debugTxTiming = process.env.DEBUG_TX_TIMING === 'true';
+let txLock: Promise<void> = Promise.resolve();
+
+async function withTxLock<T>(fn: () => Promise<T>): Promise<T> {
+  let release: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const prev = txLock;
+  txLock = prev.then(() => next);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release!();
+  }
+}
 const stakeRequired = 0;
 const tzekoTokenAddress =
   process.env.TZEKO_TOKEN_ADDRESS ?? 'B62qjUhPDbMskxMduyzkyGnK6LZwHksuuYPRjyF4owJM7UWLGJynN36';
@@ -996,6 +1012,7 @@ async function buildUnsignedTx(payload: {
   priceMina?: number;
   treasuryPublicKey?: string | null;
 }, feePayer: string) {
+  return withTxLock(async () => {
   const start = debugTxTiming ? Date.now() : 0;
   const network = getNetwork();
   if (!network.graphql) {
@@ -1110,6 +1127,7 @@ async function buildUnsignedTx(payload: {
     console.log(`buildUnsignedTx total ${Date.now() - start}ms`);
   }
   return { tx: txJson, fee, networkId: network.networkId };
+  });
 }
 
 async function buildAndSendRequestTxWithSponsor(payload: {
@@ -1121,6 +1139,7 @@ async function buildAndSendRequestTxWithSponsor(payload: {
   priceMina?: number;
   treasuryPublicKey?: string | null;
 }) {
+  return withTxLock(async () => {
   const sponsorKey = getSecret('SPONSOR_PRIVATE_KEY');
   if (!sponsorKey) {
     throw new Error('SPONSOR_PRIVATE_KEY not configured');
@@ -1223,6 +1242,7 @@ async function buildAndSendRequestTxWithSponsor(payload: {
     (sent as any)?.transactionHash ??
     null;
   return { hash };
+  });
 }
 
 
@@ -1233,6 +1253,7 @@ async function buildUnsignedOutputTx(payload: {
   signature: unknown;
   merkleRoot: string;
 }, feePayer: string) {
+  return withTxLock(async () => {
   const start = debugTxTiming ? Date.now() : 0;
   const network = getNetwork();
   if (!network.graphql) {
@@ -1316,6 +1337,7 @@ async function buildUnsignedOutputTx(payload: {
     console.log(`buildUnsignedOutputTx total ${Date.now() - start}ms`);
   }
   return { tx: txJson, fee, networkId: network.networkId };
+  });
 }
 
 async function buildAndSendOutputTxWithSponsor(payload: {
@@ -1325,6 +1347,7 @@ async function buildAndSendOutputTxWithSponsor(payload: {
   signature: unknown;
   merkleRoot: string;
 }) {
+  return withTxLock(async () => {
   const sponsorKey = getSecret('SPONSOR_PRIVATE_KEY');
   if (!sponsorKey) {
     throw new Error('SPONSOR_PRIVATE_KEY not configured');
@@ -1403,6 +1426,7 @@ async function buildAndSendOutputTxWithSponsor(payload: {
     (sent as any)?.transactionHash ??
     null;
   return { hash };
+  });
 }
 
 async function buildUnsignedCreditsTx(payload: {
@@ -1416,6 +1440,7 @@ async function buildUnsignedCreditsTx(payload: {
   platformAmountMina?: number;
   platformPayee?: string;
 }, feePayer: string) {
+  return withTxLock(async () => {
   const network = getNetwork();
   if (!network.graphql) {
     throw new Error('ZEKO_GRAPHQL env var not set');
@@ -1545,6 +1570,7 @@ async function buildUnsignedCreditsTx(payload: {
   await tx.prove();
   const txJson = tx.toJSON() as any;
   return { tx: txJson, fee, networkId: network.networkId };
+  });
 }
 
 async function buildAndSendCreditsTxWithSponsor(payload: {
@@ -1557,6 +1583,7 @@ async function buildAndSendCreditsTxWithSponsor(payload: {
   platformAmountMina?: number;
   platformPayee?: string;
 }) {
+  return withTxLock(async () => {
   const sponsorKey = getSecret('SPONSOR_PRIVATE_KEY');
   if (!sponsorKey) {
     throw new Error('SPONSOR_PRIVATE_KEY not configured');
@@ -1671,6 +1698,7 @@ async function buildAndSendCreditsTxWithSponsor(payload: {
     (sent as any)?.transactionHash ??
     null;
   return { hash };
+  });
 }
 
 
