@@ -1,4 +1,5 @@
 # Zeko AI Marketplace (Prototype)
+[![CI](https://github.com/Evan-k-global/agent-coordination-protocol_financial-intelligence/actions/workflows/ci.yml/badge.svg)](https://github.com/Evan-k-global/agent-coordination-protocol_financial-intelligence/actions/workflows/ci.yml)
 
 A working prototype for a privacy-first AI stock recommendation marketplace on Zeko. Users pay a
 small on-chain fee (via Auro) to trigger a private model run. The app stores request attestations
