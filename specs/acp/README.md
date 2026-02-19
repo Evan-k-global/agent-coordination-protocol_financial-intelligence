@@ -1,7 +1,7 @@
 # Agent Coordination Protocol (ACP) v0.1
 
-ACP is a generalized, wallet-native protocol for paid agent services with private outputs and
-public verifiability.
+The **Agent Coordination Protocol (ACP)** is a generalized, wallet-native protocol for paid agent
+services with private outputs and public verifiability.
 
 This spec abstracts the existing marketplace implementation into reusable primitives that work for
 any agent-to-agent workflow, not only financial signals.

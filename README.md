@@ -682,8 +682,9 @@ makes this a true agent‑to‑agent coordination layer rather than a UI‑only 
 
 ## ACP Specification (Generalized Protocol)
 
-This repo now includes a generalized protocol spec that abstracts the current financial demo into a
-domain-agnostic coordination protocol for any paid agent service.
+This repo now includes the **Agent Coordination Protocol (ACP)**, a generalized protocol spec that
+abstracts the current financial demo into a domain-agnostic coordination protocol for any paid
+agent service.
 
 - Spec entrypoint: `specs/acp/README.md`
 - Full protocol doc: `specs/acp/acp-v0.1.md`
