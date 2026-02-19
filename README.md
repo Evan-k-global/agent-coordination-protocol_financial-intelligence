@@ -692,3 +692,9 @@ domain-agnostic coordination protocol for any paid agent service.
 
 The app and zkApp remain the same. ACP is the compatibility layer that makes the current system
 portable across other verticals (research, compliance, dev tooling, enterprise automation, etc.).
+
+### OpenClaw compatibility
+
+ACP is designed to be OpenClaw-compatible via capability discovery (`capabilities.json`) and a
+standardized request/payment/result lifecycle. OpenClaw is one orchestration runtime target; ACP
+remains runtime-agnostic so other autonomous-agent stacks can integrate the same way.

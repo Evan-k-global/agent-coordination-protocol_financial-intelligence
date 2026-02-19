@@ -30,6 +30,13 @@ any agent-to-agent workflow, not only financial signals.
 - Private off-chain compute with on-chain commitments
 - Portable provider discovery via machine-readable capabilities
 
+## OpenClaw compatibility
+
+ACP is directly compatible with OpenClaw-style orchestration because providers can publish machine-
+readable capabilities and expose a deterministic request/payment/result interface. ACP does not
+depend on OpenClaw specifically; OpenClaw is a high-value integration target within a broader
+runtime-agnostic protocol.
+
 ## Optional trust extensions
 
 - zkTLS-backed source data commitments can be attached to output attestations for stronger input
