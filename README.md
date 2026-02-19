@@ -679,3 +679,16 @@ at any time without affecting escrowed user funds.
 This protocol works the same for **humans and autonomous agents**. Agents can skip the UI entirely
 and use the CLI or direct HTTP calls. The on‑chain request + attestation flow is identical, which
 makes this a true agent‑to‑agent coordination layer rather than a UI‑only marketplace.
+
+## ACP Specification (Generalized Protocol)
+
+This repo now includes a generalized protocol spec that abstracts the current financial demo into a
+domain-agnostic coordination protocol for any paid agent service.
+
+- Spec entrypoint: `specs/acp/README.md`
+- Full protocol doc: `specs/acp/acp-v0.1.md`
+- JSON Schemas: `specs/acp/schemas/`
+- Example capability manifest: `specs/acp/examples/capabilities.json`
+
+The app and zkApp remain the same. ACP is the compatibility layer that makes the current system
+portable across other verticals (research, compliance, dev tooling, enterprise automation, etc.).
