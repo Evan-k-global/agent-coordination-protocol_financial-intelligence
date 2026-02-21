@@ -3478,6 +3478,27 @@ async function fulfillCore(input: {
   };
 }
 
+function parseFeePayer(body: any): string {
+  const feePayer = body?.feePayer;
+  if (!feePayer || typeof feePayer !== 'string') {
+    throw new Error('Missing feePayer');
+  }
+  return feePayer;
+}
+
+function toAcpOutput(output: any) {
+  const normalized = normalizeOutputActions(output);
+  const outputs = Array.isArray(normalized?.outputs) ? normalized.outputs : [];
+  return {
+    outputs: outputs.map((entry: any) => ({
+      symbol: String(entry?.symbol ?? 'N/A'),
+      action: normalizeAcpAction(entry?.action),
+      confidence: Number(entry?.confidence ?? 0),
+      rationale: Array.isArray(entry?.rationale) ? entry.rationale.map((r: any) => String(r)) : []
+    }))
+  };
+}
+
 app.get('/api/config', (_req, res) => {
   const network = getNetwork();
   res.json({
@@ -3552,16 +3573,7 @@ app.post('/acp/fulfill', async (req, res) => {
   try {
     const { requestId, txHash, creditTxHash, accessToken } = req.body ?? {};
     const fulfilled = await fulfillCore({ requestId, txHash, creditTxHash, accessToken });
-    const normalized = normalizeOutputActions(fulfilled.output);
-    const outputs = Array.isArray(normalized?.outputs) ? normalized.outputs : [];
-    const acpOutput = {
-      outputs: outputs.map((entry: any) => ({
-        symbol: String(entry?.symbol ?? 'N/A'),
-        action: normalizeAcpAction(entry?.action),
-        confidence: Number(entry?.confidence ?? 0),
-        rationale: Array.isArray(entry?.rationale) ? entry.rationale.map((r: any) => String(r)) : []
-      }))
-    };
+    const acpOutput = toAcpOutput(fulfilled.output);
     res.json({
       protocol: acpProtocol,
       version: acpVersion,
@@ -4132,10 +4144,8 @@ app.post('/api/intent', async (req, res) => {
 
 app.post('/api/tx', async (req, res) => {
   try {
-    const { payload, feePayer } = req.body ?? {};
-    if (!feePayer || typeof feePayer !== 'string') {
-      throw new Error('Missing feePayer');
-    }
+    const { payload } = req.body ?? {};
+    const feePayer = parseFeePayer(req.body);
     const result = await buildUnsignedTx(payload, feePayer);
     res.json(result);
   } catch (err) {
@@ -4147,10 +4157,8 @@ app.post('/api/tx', async (req, res) => {
 
 app.post('/api/output-tx', async (req, res) => {
   try {
-    const { payload, feePayer } = req.body ?? {};
-    if (!feePayer || typeof feePayer !== 'string') {
-      throw new Error('Missing feePayer');
-    }
+    const { payload } = req.body ?? {};
+    const feePayer = parseFeePayer(req.body);
     const result = await buildUnsignedOutputTx(payload, feePayer);
     res.json(result);
   } catch (err) {
@@ -4161,10 +4169,8 @@ app.post('/api/output-tx', async (req, res) => {
 
 app.post('/api/credits-tx', async (req, res) => {
   try {
-    const { payload, feePayer } = req.body ?? {};
-    if (!feePayer || typeof feePayer !== 'string') {
-      throw new Error('Missing feePayer');
-    }
+    const { payload } = req.body ?? {};
+    const feePayer = parseFeePayer(req.body);
     const result = await buildUnsignedCreditsTx(payload, feePayer);
     res.json(result);
   } catch (err) {

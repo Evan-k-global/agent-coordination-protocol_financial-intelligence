@@ -456,11 +456,16 @@ MetaMask users must install the snap and create a Mina account using the Mina Po
 Note: Mina Portal snap support for Zeko testnet is not guaranteed; as of the published docs it
 targets the Mina Berkeley testnet, so Zeko support may require a snap fork or network extension.
 
-### Forking Mina Snap for Zeko (recommended)
+### Mina Snap isolation strategy (recommended)
 
-We cloned the Mina snap repo to `/Users/evankereiakes/Documents/Codex/app1/mina-snap-fork` and added a
-**Zeko Testnet** network entry in the snap + site. You can run it locally as a Snap and point this
-app to it:
+Treat Mina Snap as an external dependency and keep this repository focused on the marketplace
+protocol. Preferred setup:
+
+1. Keep upstream snap in its own repo/worktree (or git submodule/subtree).
+2. Maintain a small local patch set for Zeko-specific changes.
+3. Reference upstream docs/releases, and only carry minimal Zeko overrides here.
+
+Local dev flow:
 
 ```bash
 cd /Users/evankereiakes/Documents/Codex/app1/mina-snap-fork
