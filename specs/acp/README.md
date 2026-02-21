@@ -41,3 +41,15 @@ runtime-agnostic protocol.
 
 - zkTLS-backed source data commitments can be attached to output attestations for stronger input
   provenance when providers rely on web/API data.
+
+## OpenClaw get-started
+
+OpenClaw's ACP Bridge pattern is straightforward:
+
+1. Read provider capabilities (`/.well-known/acp-capabilities.json`).
+2. Create ACP intent (`POST /acp/intent`).
+3. Settle payment (`pay_per_request` or `credits`).
+4. Fulfill request (`POST /acp/fulfill`).
+5. Consume normalized ACP result envelope.
+
+See concrete templates in `examples/openclaw/`.
