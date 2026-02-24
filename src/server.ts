@@ -1829,6 +1829,68 @@ async function ensureSeedData() {
   }
 }
 
+function computeRequestStats(requests: any[]) {
+  const byAgent: Record<string, number> = {};
+  const attestedByAgent: Record<string, number> = {};
+  for (const req of requests) {
+    const agentId = canonicalAgentId(req?.agentId) || String(req?.agentId || '');
+    if (!agentId) continue;
+    byAgent[agentId] = (byAgent[agentId] || 0) + 1;
+    if (req?.outputProof) {
+      attestedByAgent[agentId] = (attestedByAgent[agentId] || 0) + 1;
+    }
+  }
+  const nonAlphaRequests = Object.entries(byAgent)
+    .filter(([agentId]) => agentId !== 'alpha-signal')
+    .reduce((sum, [, count]) => sum + count, 0);
+  return {
+    totalRequests: requests.length,
+    byAgent,
+    attestedByAgent,
+    nonAlphaRequests
+  };
+}
+
+async function mergeSeedRequests(options?: { onlyIfMissingNonAlpha?: boolean; dryRun?: boolean }) {
+  const onlyIfMissingNonAlpha = options?.onlyIfMissingNonAlpha ?? false;
+  const dryRun = options?.dryRun ?? false;
+  const requestsStore = await readJson<{ requests: any[] }>(requestsPath, { requests: [] });
+  const existingRequests = Array.isArray(requestsStore.requests) ? requestsStore.requests : [];
+  const beforeStats = computeRequestStats(existingRequests);
+  if (onlyIfMissingNonAlpha && beforeStats.nonAlphaRequests > 0) {
+    return { merged: false, added: 0, skipped: 'non-alpha requests already present', before: beforeStats, after: beforeStats };
+  }
+  const seedPath = path.join(bundledDataDir, 'requests_seed.json');
+  const seedStore = await readJson<{ requests: any[] }>(seedPath, { requests: [] });
+  const seedRequests = Array.isArray(seedStore.requests) ? seedStore.requests : [];
+  if (!seedRequests.length) {
+    return { merged: false, added: 0, skipped: 'seed file empty', before: beforeStats, after: beforeStats };
+  }
+  const knownIds = new Set(existingRequests.map((entry) => String(entry?.id || '')));
+  const toAdd: any[] = [];
+  for (const raw of seedRequests) {
+    const id = String(raw?.id || '');
+    if (!id || knownIds.has(id)) continue;
+    const normalizedAgentId = canonicalAgentId(raw?.agentId) || String(raw?.agentId || '');
+    toAdd.push({ ...raw, agentId: normalizedAgentId });
+    knownIds.add(id);
+  }
+  if (!dryRun && toAdd.length > 0) {
+    requestsStore.requests = [...existingRequests, ...toAdd];
+    await writeJson(requestsPath, requestsStore);
+  }
+  const afterRequests = dryRun ? [...existingRequests, ...toAdd] : requestsStore.requests;
+  const afterStats = computeRequestStats(afterRequests);
+  return { merged: toAdd.length > 0, added: toAdd.length, before: beforeStats, after: afterStats };
+}
+
+async function logRequestStats(prefix: string) {
+  const requestsStore = await readJson<{ requests: any[] }>(requestsPath, { requests: [] });
+  const requests = Array.isArray(requestsStore.requests) ? requestsStore.requests : [];
+  const stats = computeRequestStats(requests);
+  console.log(`[${prefix}] request stats total=${stats.totalRequests} byAgent=${JSON.stringify(stats.byAgent)} attested=${JSON.stringify(stats.attestedByAgent)}`);
+}
+
 async function getTickerCikMap(): Promise<Map<string, string>> {
   const cacheKey = 'company_tickers';
   const cached = await readEdgarCache<Record<string, any>>(cacheKey);
@@ -3797,6 +3859,26 @@ app.post('/api/admin/seed-requests', async (req, res) => {
   }
 });
 
+app.post('/api/admin/migrate-requests-seed', async (req, res) => {
+  try {
+    const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!adminToken || token !== adminToken) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    const force = Boolean(req.body?.force);
+    const dryRun = Boolean(req.body?.dryRun);
+    const result = await mergeSeedRequests({
+      onlyIfMissingNonAlpha: !force,
+      dryRun
+    });
+    await logRequestStats('admin-migrate');
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Seed migration failed';
+    res.status(400).json({ error: message });
+  }
+});
+
 
 app.get('/api/leaderboard', async (_req, res) => {
   const data = await readJson<{ agents: any[] }>(agentsPath, { agents: [] });
@@ -4503,7 +4585,6 @@ app.listen(port, () => {
   console.log(`PRECOMPILE_ZKAPP=${String(precompileZkapp)} DEBUG_TX_TIMING=${String(debugTxTiming)}`);
 });
 
-ensureSeedData();
 ensureMassiveFlatfilesFresh();
 ensureSymbolIndexFresh();
 if (precompileZkapp) {
@@ -4511,3 +4592,16 @@ if (precompileZkapp) {
     console.warn('Precompile failed:', err instanceof Error ? err.message : err);
   });
 }
+
+(async () => {
+  try {
+    await ensureSeedData();
+    const migration = await mergeSeedRequests({ onlyIfMissingNonAlpha: true });
+    if (migration.added > 0) {
+      console.log(`[startup] merged ${migration.added} seeded requests for missing non-alpha history`);
+    }
+    await logRequestStats('startup');
+  } catch (err) {
+    console.warn('Startup data init failed:', err instanceof Error ? err.message : err);
+  }
+})();
