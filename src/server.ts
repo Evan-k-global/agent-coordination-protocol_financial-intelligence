@@ -2431,6 +2431,33 @@ async function computeRealizedPnL(
   if (process.env.DEBUG_PERF === 'true') {
     console.warn('Perf debug summary', { totalDays, cagr, winRate, avgReturn, debug });
   }
+  if (Math.abs(cagr) < 1e-12 && fallbackTradeReturns.length > 0) {
+    const fallbackGrowth = fallbackTradeReturns.reduce((acc, value) => acc * (1 + value), 1);
+    const fallbackDays = Math.max(fallbackTotalDays, 20);
+    const fallbackYears = fallbackDays / 252;
+    let fallbackCagr = fallbackYears > 0 ? Math.pow(fallbackGrowth, 1 / fallbackYears) - 1 : 0;
+    if (!Number.isFinite(fallbackCagr) || fallbackCagr < -0.9 || fallbackCagr > 10) {
+      fallbackCagr = Math.max(-0.9, Math.min(10, fallbackCagr));
+    }
+    const fallbackAvg =
+      fallbackTradeReturns.reduce((sum, value) => sum + value, 0) / fallbackTradeReturns.length;
+    const fallbackWins = fallbackTradeReturns.filter((value) => value > 0).length;
+    return includeDebug
+      ? {
+          avgReturn: fallbackAvg,
+          winRate: fallbackTradeReturns.length ? fallbackWins / fallbackTradeReturns.length : 0,
+          cagr: fallbackCagr,
+          coverage: considered ? priced / considered : 0,
+          totalDays: fallbackDays,
+          debug
+        }
+      : {
+          avgReturn: fallbackAvg,
+          winRate: fallbackTradeReturns.length ? fallbackWins / fallbackTradeReturns.length : 0,
+          cagr: fallbackCagr,
+          coverage: considered ? priced / considered : 0
+        };
+  }
   return includeDebug
     ? { avgReturn, winRate, cagr, coverage: considered ? priced / considered : 0, totalDays, debug }
     : { avgReturn, winRate, cagr, coverage: considered ? priced / considered : 0 };
