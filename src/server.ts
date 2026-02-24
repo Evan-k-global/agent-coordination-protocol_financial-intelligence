@@ -331,6 +331,16 @@ function normalizeActionLabel(action: string | null | undefined) {
   return 'NEUTRAL';
 }
 
+function canonicalAgentId(agentId: string | null | undefined) {
+  const value = String(agentId || '').trim().toLowerCase();
+  if (!value) return '';
+  if (value === 'alpha') return 'alpha-signal';
+  if (value === 'edgar') return 'edgar-scout';
+  if (value === 'macro' || value === 'marco') return 'macro-sentiment';
+  if (value === 'crypto') return 'crypto-quant';
+  return value;
+}
+
 function normalizeOutputActions(output: any) {
   if (!output || typeof output !== 'object') return output;
   const outputs = Array.isArray(output.outputs) ? output.outputs : [output];
@@ -2465,11 +2475,12 @@ async function computeRealizedPnL(
 
 app.get('/api/perf-debug', async (req, res) => {
   try {
-    const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : null;
+    const rawAgentId = typeof req.query.agentId === 'string' ? req.query.agentId : null;
+    const agentId = rawAgentId && rawAgentId.toLowerCase() !== 'all' ? canonicalAgentId(rawAgentId) : null;
     const requestsStore = await readJson<{ requests: any[] }>(requestsPath, { requests: [] });
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const filtered = requestsStore.requests.filter((req) => {
-      if (agentId && req.agentId !== agentId) return false;
+      if (agentId && canonicalAgentId(req.agentId) !== agentId) return false;
       if (!req.outputProof) return false;
       const ts = Date.parse(req.fulfilledAt || req.createdAt || '');
       return Number.isFinite(ts) && ts >= cutoff;
@@ -2665,7 +2676,7 @@ app.get('/api/price-coverage', async (_req, res) => {
   const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const coverage = await Promise.all(
     data.agents.map(async (agent) => {
-      const agentRequests = requestsStore.requests.filter((req) => req.agentId === agent.id);
+      const agentRequests = requestsStore.requests.filter((req) => canonicalAgentId(req.agentId) === agent.id);
       const attested = agentRequests.filter((req) => req.outputProof);
       const recentOutputs = attested
         .filter((req) => {
@@ -3322,6 +3333,8 @@ async function createIntentCore(input: {
 }) {
   const { agentId, prompt, requester, useCredits } = input;
   if (!agentId || typeof agentId !== 'string') throw new Error('Missing agentId');
+  const normalizedAgentId = canonicalAgentId(agentId);
+  if (!normalizedAgentId) throw new Error('Missing agentId');
   if (!prompt || typeof prompt !== 'string') throw new Error('Missing prompt');
   if (containsProhibitedPersonalContext(prompt)) {
     throw new Error('Prompt includes personal financial context. Please remove personal details.');
@@ -3329,7 +3342,7 @@ async function createIntentCore(input: {
   const sanitizedPrompt = sanitizePrompt(prompt);
 
   const data = await readJson<{ agents: any[] }>(agentsPath, { agents: [] });
-  const agent = data.agents.find((entry) => entry.id === agentId);
+  const agent = data.agents.find((entry) => entry.id === normalizedAgentId);
   if (!agent) throw new Error('Unknown agent');
   if (agent.disabled) {
     throw new Error('Agent is disabled by the platform');
@@ -3367,8 +3380,8 @@ async function createIntentCore(input: {
   const accessToken = crypto.randomBytes(24).toString('base64url');
   const createdAt = new Date().toISOString();
   const requesterValue = useCredits ? 'CREDITS' : requester ?? '';
-  const requestHash = hashToField(`${agentId}:${sanitizedPrompt}:${createdAt}:${requesterValue}`);
-  const agentIdHash = hashToField(agentId);
+  const requestHash = hashToField(`${normalizedAgentId}:${sanitizedPrompt}:${createdAt}:${requesterValue}`);
+  const agentIdHash = hashToField(normalizedAgentId);
 
   const leaf = computeLeaf(requestHash, agentIdHash);
   const { index, newRoot, witness } = await commitLeaf(leaf);
@@ -3381,7 +3394,7 @@ async function createIntentCore(input: {
   const priceMina = quotedPrice ?? agent.priceMina;
   requestsStore.requests.unshift({
     id: requestId,
-    agentId,
+    agentId: normalizedAgentId,
     prompt: sanitizedPrompt,
     requester: requesterValue || null,
     useCredits: Boolean(useCredits),
@@ -3464,18 +3477,19 @@ async function fulfillCore(input: {
 
   let output;
   try {
+    const requestAgentId = canonicalAgentId(request.agentId);
     const agentsStore = await readJson<{ agents: any[] }>(agentsPath, { agents: [] });
-    const agentEntry = agentsStore.agents.find((agent) => agent.id === request.agentId);
+    const agentEntry = agentsStore.agents.find((agent) => agent.id === requestAgentId);
     output =
       (await callExternalModel(agentEntry, {
         requestId: request.id,
-        agentId: request.agentId,
+        agentId: requestAgentId,
         prompt: request.prompt,
         requester: request.useCredits ? 'credits:anonymous' : request.requester,
         requestHash: request.requestHash
       })) ||
       (await simulateModel({
-        agentId: request.agentId,
+        agentId: requestAgentId,
         prompt: request.prompt,
         requestId: request.id
       }));
@@ -3688,7 +3702,7 @@ app.get('/api/agents', async (_req, res) => {
         'macro-sentiment': 'Sector ETFs + gold/oil macro + price series',
         'crypto-quant': 'Top 500 crypto universe + price series'
       };
-      const agentRequests = requestsStore.requests.filter((req) => req.agentId === agent.id);
+      const agentRequests = requestsStore.requests.filter((req) => canonicalAgentId(req.agentId) === agent.id);
       const attested = agentRequests.filter((req) => req.outputProof);
       const recent = agentRequests.filter((req) => {
         const ts = Date.parse(req.createdAt || '');
@@ -3701,17 +3715,12 @@ app.get('/api/agents', async (_req, res) => {
         })
         .flatMap((req) => {
           const source = req.outputSummary ?? req.output;
-      const list = Array.isArray(source?.outputs) ? source.outputs : [source];
-      return list.map((entry: any) => ({
-        symbol: entry?.symbol ?? 'AAPL',
-        action:
-          entry?.action === 'POSITIVE'
-            ? 'POSITIVE'
-            : entry?.action === 'NEGATIVE'
-              ? 'NEGATIVE'
-              : 'NEUTRAL',
-        fulfilledAt: req.fulfilledAt ?? req.createdAt
-      }));
+          const list = Array.isArray(source?.outputs) ? source.outputs : [source];
+          return list.map((entry: any) => ({
+            symbol: entry?.symbol ?? 'AAPL',
+            action: normalizeActionLabel(entry?.action),
+            fulfilledAt: req.fulfilledAt ?? req.createdAt
+          }));
         })
         .filter((entry) => entry.fulfilledAt);
       const perf30d = await computeRealizedPnL(recentOutputs);
@@ -3795,7 +3804,7 @@ app.get('/api/leaderboard', async (_req, res) => {
   const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const stats = await Promise.all(
     data.agents.map(async (agent) => {
-      const agentRequests = requestsStore.requests.filter((req) => req.agentId === agent.id);
+      const agentRequests = requestsStore.requests.filter((req) => canonicalAgentId(req.agentId) === agent.id);
       const fulfilled = agentRequests.filter((req) => req.status === 'FULFILLED');
       const attested = fulfilled.filter((req) => req.outputProof);
       const recent = agentRequests.filter((req) => {
