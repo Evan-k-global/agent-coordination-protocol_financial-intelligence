@@ -2254,6 +2254,8 @@ async function computeRealizedPnL(
   });
 
   const tradeReturns: number[] = [];
+  const fallbackTradeReturns: number[] = [];
+  let fallbackTotalDays = 0;
   let totalDailyReturn = 1;
   let totalDays = 0;
   let considered = 0;
@@ -2281,6 +2283,26 @@ async function computeRealizedPnL(
         if (idx < lastIndex) idx = lastIndex;
         return idx;
       };
+
+      // Fallback mode for sparse intraday/same-day traffic:
+      // compute per-signal forward returns over a short window.
+      for (const signal of sorted) {
+        if (signal.action !== 'POSITIVE' && signal.action !== 'NEGATIVE') continue;
+        const entryIndex = series.findIndex((row) => row.date >= signal.date);
+        if (entryIndex === -1) continue;
+        const entry = series[entryIndex];
+        const exit = pickExitDate(series, signal.date);
+        if (!entry || !exit || !entry.close || !exit.close) continue;
+        const raw = (exit.close - entry.close) / entry.close;
+        const adjusted = signal.action === 'NEGATIVE' ? -raw : raw;
+        fallbackTradeReturns.push(adjusted);
+        const exitIndex = series.findIndex((row) => row.date === exit.date);
+        if (exitIndex >= entryIndex) {
+          fallbackTotalDays += Math.max(1, exitIndex - entryIndex);
+        } else {
+          fallbackTotalDays += 1;
+        }
+      }
 
       for (let i = 0; i < sorted.length; i += 1) {
         const signal = sorted[i];
@@ -2351,6 +2373,32 @@ async function computeRealizedPnL(
   }
 
   if (!totalDays) {
+    if (fallbackTradeReturns.length > 0) {
+      const fallbackGrowth = fallbackTradeReturns.reduce((acc, value) => acc * (1 + value), 1);
+      const fallbackDays = Math.max(fallbackTotalDays, 20);
+      const fallbackYears = fallbackDays / 252;
+      const fallbackAvg = fallbackTradeReturns.reduce((sum, value) => sum + value, 0) / fallbackTradeReturns.length;
+      const fallbackWins = fallbackTradeReturns.filter((value) => value > 0).length;
+      let fallbackCagr = fallbackYears > 0 ? Math.pow(fallbackGrowth, 1 / fallbackYears) - 1 : 0;
+      if (!Number.isFinite(fallbackCagr) || fallbackCagr < -0.9 || fallbackCagr > 10) {
+        fallbackCagr = Math.max(-0.9, Math.min(10, fallbackCagr));
+      }
+      return includeDebug
+        ? {
+            avgReturn: fallbackAvg,
+            winRate: fallbackTradeReturns.length ? fallbackWins / fallbackTradeReturns.length : 0,
+            cagr: fallbackCagr,
+            coverage: considered ? priced / considered : 0,
+            totalDays: fallbackDays,
+            debug
+          }
+        : {
+            avgReturn: fallbackAvg,
+            winRate: fallbackTradeReturns.length ? fallbackWins / fallbackTradeReturns.length : 0,
+            cagr: fallbackCagr,
+            coverage: considered ? priced / considered : 0
+          };
+    }
     if (process.env.DEBUG_PERF === 'true') {
       console.warn('Perf debug: no totalDays', debug);
     }
