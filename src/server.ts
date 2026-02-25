@@ -369,13 +369,49 @@ async function readJson<T>(filePath: string, fallback: T): Promise<T> {
   try {
     const raw = await fs.readFile(filePath, 'utf8');
     return JSON.parse(raw) as T;
-  } catch {
+  } catch (err) {
+    // If primary JSON is temporarily corrupted/truncated, try latest local backup.
+    try {
+      const dir = path.dirname(filePath);
+      const base = path.basename(filePath);
+      const entries = await fs.readdir(dir);
+      const backups = entries
+        .filter((name) => name.startsWith(`${base}.bak.`))
+        .sort((a, b) => b.localeCompare(a));
+      if (backups.length > 0) {
+        const raw = await fs.readFile(path.join(dir, backups[0]), 'utf8');
+        return JSON.parse(raw) as T;
+      }
+    } catch {
+      // ignore backup recovery failures
+    }
     return fallback;
   }
 }
 
+const writeQueues = new Map<string, Promise<void>>();
 async function writeJson(filePath: string, payload: unknown) {
-  await fs.writeFile(filePath, JSON.stringify(payload, null, 2));
+  const run = async () => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const body = JSON.stringify(payload, null, 2);
+    const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+    // Best-effort rolling backup for critical mutable stores.
+    const base = path.basename(filePath);
+    if (base === 'requests.json' || base === 'agents.json') {
+      try {
+        const bakPath = `${filePath}.bak.${Date.now()}`;
+        await fs.copyFile(filePath, bakPath);
+      } catch {
+        // ignore missing source or backup errors
+      }
+    }
+    await fs.writeFile(tmpPath, body, 'utf8');
+    await fs.rename(tmpPath, filePath);
+  };
+  const prev = writeQueues.get(filePath) || Promise.resolve();
+  const next = prev.then(run, run);
+  writeQueues.set(filePath, next.catch(() => {}));
+  await next;
 }
 
 async function readCreditsLedger() {
