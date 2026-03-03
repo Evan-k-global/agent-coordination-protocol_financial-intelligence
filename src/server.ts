@@ -41,6 +41,8 @@ const massiveS3Region = process.env.MASSIVE_S3_REGION || 'us-east-1';
 const massiveS3ForcePathStyle = process.env.MASSIVE_S3_FORCE_PATH_STYLE !== 'false';
 const massiveS3Insecure = process.env.MASSIVE_S3_INSECURE === 'true';
 const massiveFlatfilesMode = process.env.MASSIVE_FLATFILES_MODE || 'targeted';
+const priceFetchMode = (process.env.PRICE_FETCH_MODE || 'live').toLowerCase();
+const dailyPriceMode = priceFetchMode === 'daily';
 const massiveFlatfilesStocksPrefix =
   process.env.MASSIVE_FLATFILES_STOCKS_PREFIX || 'us_stocks_sip/day_aggs_v1';
 const massiveFlatfilesCryptoPrefix =
@@ -2195,10 +2197,25 @@ async function fetchMassiveDaily(symbol: string, isCrypto: boolean) {
 
 async function fetchBestPriceSeries(symbol: string) {
   const crypto = await isCryptoSymbol(symbol);
+  const cached = await readPriceCache(symbol);
+
+  if (dailyPriceMode) {
+    try {
+      const flatfile = await readFlatfileSeries(symbol);
+      if (flatfile.length > 1) {
+        const merged = mergeSeries(cached, flatfile);
+        await writePriceCache(symbol, merged);
+        return merged;
+      }
+    } catch {
+      // ignore and fall back to cache
+    }
+    return cached;
+  }
+
   try {
     const twelve = await fetchTwelveDataDaily(symbol, crypto);
     if (twelve.length > 1) {
-      const cached = await readPriceCache(symbol);
       const merged = mergeSeries(cached, twelve);
       await writePriceCache(symbol, merged);
       return merged;
@@ -2211,7 +2228,6 @@ async function fetchBestPriceSeries(symbol: string) {
     if (shouldUseMassive()) {
       const massive = await fetchMassiveDaily(symbol, crypto);
       if (massive.length > 1) {
-        const cached = await readPriceCache(symbol);
         const merged = mergeSeries(cached, massive);
         await writePriceCache(symbol, merged);
         return merged;
@@ -2226,7 +2242,6 @@ async function fetchBestPriceSeries(symbol: string) {
     try {
       const alpha = await fetchAlphaVantageDaily(symbol, crypto);
       if (alpha.length > 1) {
-        const cached = await readPriceCache(symbol);
         const merged = mergeSeries(cached, alpha);
         await writePriceCache(symbol, merged);
         return merged;
@@ -2239,7 +2254,6 @@ async function fetchBestPriceSeries(symbol: string) {
   try {
     const flatfile = await readFlatfileSeries(symbol);
     if (flatfile.length > 1) {
-      const cached = await readPriceCache(symbol);
       const merged = mergeSeries(cached, flatfile);
       await writePriceCache(symbol, merged);
       return merged;
@@ -2248,7 +2262,6 @@ async function fetchBestPriceSeries(symbol: string) {
     // ignore and fall back to cache
   }
 
-  const cached = await readPriceCache(symbol);
   return cached;
 }
 
@@ -3714,7 +3727,8 @@ app.get('/api/config', (_req, res) => {
     treasury: resolveTreasuryKey(),
     relayerPublicKey: getRelayerPublicKey(),
     platformFeeMina,
-    creditsMinDeposit
+    creditsMinDeposit,
+    priceFetchMode
   });
 });
 
