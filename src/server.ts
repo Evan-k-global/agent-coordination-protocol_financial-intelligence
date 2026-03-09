@@ -46,6 +46,7 @@ const dailyPriceMode = priceFetchMode === 'daily';
 const backupKeepCount = Math.max(1, Number(process.env.DATA_BACKUP_KEEP_COUNT || 14));
 const tmpFileKeepCount = Math.max(4, Number(process.env.DATA_TMP_KEEP_COUNT || 16));
 const tmpFileMaxAgeMs = Math.max(60_000, Number(process.env.DATA_TMP_MAX_AGE_MS || 6 * 60 * 60 * 1000));
+const backupMaxBytes = Math.max(0, Number(process.env.DATA_BACKUP_MAX_BYTES || 1_000_000));
 const massiveFlatfilesStocksPrefix =
   process.env.MASSIVE_FLATFILES_STOCKS_PREFIX || 'us_stocks_sip/day_aggs_v1';
 const massiveFlatfilesCryptoPrefix =
@@ -435,15 +436,59 @@ async function pruneFileTemps(filePath: string, keep = tmpFileKeepCount, maxAgeM
   }
 }
 
+async function shouldWriteBackup(filePath: string) {
+  const base = path.basename(filePath);
+  if (base !== 'requests.json' && base !== 'agents.json') {
+    return false;
+  }
+  if (base === 'requests.json' && backupMaxBytes === 0) {
+    return false;
+  }
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.size <= backupMaxBytes || base === 'agents.json';
+  } catch {
+    return false;
+  }
+}
+
+async function emergencyPruneDataDir(dir: string) {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+    await Promise.all(
+      files
+        .filter((name) => name.includes('.tmp.'))
+        .map((name) => fs.rm(path.join(dir, name), { force: true }))
+    );
+    const jsonBases = Array.from(
+      new Set(
+        files
+          .filter((name) => name.includes('.bak.'))
+          .map((name) => name.split('.bak.')[0])
+      )
+    );
+    await Promise.all(
+      jsonBases.map(async (base) => {
+        const backups = files
+          .filter((name) => name.startsWith(`${base}.bak.`))
+          .sort((a, b) => b.localeCompare(a));
+        const stale = backups.slice(Math.max(1, backupKeepCount));
+        await Promise.all(stale.map((name) => fs.rm(path.join(dir, name), { force: true })));
+      })
+    );
+  } catch {
+    // ignore emergency prune failures
+  }
+}
+
 async function writeJson(filePath: string, payload: unknown) {
   const run = async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await pruneFileTemps(filePath);
     const body = JSON.stringify(payload, null, 2);
     const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
-    // Best-effort rolling backup for critical mutable stores.
-    const base = path.basename(filePath);
-    if (base === 'requests.json' || base === 'agents.json') {
+    if (await shouldWriteBackup(filePath)) {
       try {
         const bakPath = `${filePath}.bak.${Date.now()}`;
         await fs.copyFile(filePath, bakPath);
@@ -452,9 +497,23 @@ async function writeJson(filePath: string, payload: unknown) {
         // ignore missing source or backup errors
       }
     }
+    let retriedForSpace = false;
     try {
-      await fs.writeFile(tmpPath, body, 'utf8');
-      await fs.rename(tmpPath, filePath);
+      while (true) {
+        try {
+          await fs.writeFile(tmpPath, body, 'utf8');
+          await fs.rename(tmpPath, filePath);
+          break;
+        } catch (err) {
+          const code = err && typeof err === 'object' && 'code' in err ? String((err as any).code) : '';
+          if (code === 'ENOSPC' && !retriedForSpace) {
+            retriedForSpace = true;
+            await emergencyPruneDataDir(path.dirname(filePath));
+            continue;
+          }
+          throw err;
+        }
+      }
     } finally {
       await fs.rm(tmpPath, { force: true }).catch(() => {});
     }
