@@ -470,6 +470,25 @@ type RequestPayloadRecord = {
   outputProof?: any;
 };
 
+let storageReadyPromise: Promise<void> | null = null;
+
+async function ensureStorageReady() {
+  if (!storageReadyPromise) {
+    storageReadyPromise = (async () => {
+      await fs.mkdir(requestPayloadsDir, { recursive: true });
+      const compacted = await compactRequestStore();
+      if (compacted) {
+        console.log('[storage] compacted requests store into sidecar payload files');
+      }
+    })().catch((err) => {
+      storageReadyPromise = null;
+      console.warn('[storage] init failed:', err instanceof Error ? err.message : err);
+      throw err;
+    });
+  }
+  return storageReadyPromise;
+}
+
 async function readRequestPayload(requestId: string): Promise<RequestPayloadRecord> {
   if (!requestId) return {};
   return readJson<RequestPayloadRecord>(path.join(requestPayloadsDir, `${requestId}.json`), {});
@@ -3579,6 +3598,7 @@ async function createIntentCore(input: {
   requester?: string;
   useCredits?: boolean;
 }) {
+  await ensureStorageReady();
   const { agentId, prompt, requester, useCredits } = input;
   if (!agentId || typeof agentId !== 'string') throw new Error('Missing agentId');
   const normalizedAgentId = canonicalAgentId(agentId);
@@ -3682,6 +3702,7 @@ async function fulfillCore(input: {
   creditTxHash?: string;
   accessToken?: string;
 }) {
+  await ensureStorageReady();
   const { requestId, txHash, creditTxHash, accessToken } = input;
   if (!requestId) throw new Error('Missing requestId');
 
@@ -4688,6 +4709,7 @@ app.post('/api/status', async (req, res) => {
 });
 
 app.get('/api/requests/:id', async (req, res) => {
+  await ensureStorageReady();
   const requestId = req.params.id;
   const requestsStore = await readJson<{ requests: any[] }>(requestsPath, { requests: [] });
   const request = requestsStore.requests.find((entry) => entry.id === requestId);
@@ -4721,6 +4743,7 @@ app.get('/api/requests/:id', async (req, res) => {
 });
 
 app.post('/api/requests/:id/challenge', async (req, res) => {
+  await ensureStorageReady();
   const requestId = req.params.id;
   const requestsStore = await readJson<{ requests: any[] }>(requestsPath, { requests: [] });
   const request = requestsStore.requests.find((entry) => entry.id === requestId);
@@ -4740,6 +4763,7 @@ app.post('/api/requests/:id/challenge', async (req, res) => {
 
 app.post('/api/requests/:id/reveal', async (req, res) => {
   try {
+    await ensureStorageReady();
     const requestId = req.params.id;
     const { publicKey, signature } = req.body ?? {};
     if (!publicKey || !signature) {
@@ -4796,10 +4820,7 @@ if (precompileZkapp) {
 (async () => {
   try {
     await ensureSeedData();
-    const compacted = await compactRequestStore();
-    if (compacted) {
-      console.log('[startup] compacted requests store into sidecar payload files');
-    }
+    await ensureStorageReady();
     const migration = await mergeSeedRequests({ onlyIfMissingNonAlpha: true });
     if (migration.added > 0) {
       console.log(`[startup] merged ${migration.added} seeded requests for missing non-alpha history`);
