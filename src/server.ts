@@ -43,6 +43,9 @@ const massiveS3Insecure = process.env.MASSIVE_S3_INSECURE === 'true';
 const massiveFlatfilesMode = process.env.MASSIVE_FLATFILES_MODE || 'targeted';
 const priceFetchMode = (process.env.PRICE_FETCH_MODE || 'live').toLowerCase();
 const dailyPriceMode = priceFetchMode === 'daily';
+const backupKeepCount = Math.max(1, Number(process.env.DATA_BACKUP_KEEP_COUNT || 14));
+const tmpFileKeepCount = Math.max(4, Number(process.env.DATA_TMP_KEEP_COUNT || 16));
+const tmpFileMaxAgeMs = Math.max(60_000, Number(process.env.DATA_TMP_MAX_AGE_MS || 6 * 60 * 60 * 1000));
 const massiveFlatfilesStocksPrefix =
   process.env.MASSIVE_FLATFILES_STOCKS_PREFIX || 'us_stocks_sip/day_aggs_v1';
 const massiveFlatfilesCryptoPrefix =
@@ -80,6 +83,7 @@ const sp500Path = path.join(dataDir, 'sp500_sample.json');
 const macroPath = path.join(dataDir, 'macro_sample.json');
 const cryptoPath = path.join(dataDir, 'crypto_top500.json');
 const requestsPath = path.join(dataDir, 'requests.json');
+const requestPayloadsDir = path.join(dataDir, 'request_payloads');
 const merklePath = path.join(dataDir, 'merkle.json');
 const outputMerklePath = path.join(dataDir, 'output_merkle.json');
 const agentMerklePath = path.join(dataDir, 'agent_merkle.json');
@@ -392,9 +396,49 @@ async function readJson<T>(filePath: string, fallback: T): Promise<T> {
 }
 
 const writeQueues = new Map<string, Promise<void>>();
+async function pruneFileBackups(filePath: string, keep = backupKeepCount) {
+  try {
+    const dir = path.dirname(filePath);
+    const base = path.basename(filePath);
+    const entries = await fs.readdir(dir);
+    const backups = entries
+      .filter((name) => name.startsWith(`${base}.bak.`))
+      .map((name) => path.join(dir, name))
+      .sort((a, b) => b.localeCompare(a));
+    const stale = backups.slice(keep);
+    await Promise.all(stale.map((target) => fs.rm(target, { force: true })));
+  } catch {
+    // ignore backup pruning failures
+  }
+}
+
+async function pruneFileTemps(filePath: string, keep = tmpFileKeepCount, maxAgeMs = tmpFileMaxAgeMs) {
+  try {
+    const dir = path.dirname(filePath);
+    const base = path.basename(filePath);
+    const now = Date.now();
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const temps = entries
+      .filter((entry) => entry.isFile() && entry.name.startsWith(`${base}.tmp.`))
+      .map((entry) => ({ name: entry.name, fullPath: path.join(dir, entry.name) }))
+      .sort((a, b) => b.name.localeCompare(a.name));
+    const staleByCount = temps.slice(keep).map((item) => item.fullPath);
+    const staleByAge: string[] = [];
+    for (const item of temps) {
+      const stat = await fs.stat(item.fullPath).catch(() => null);
+      if (stat && now - stat.mtimeMs > maxAgeMs) staleByAge.push(item.fullPath);
+    }
+    const stale = Array.from(new Set([...staleByCount, ...staleByAge]));
+    await Promise.all(stale.map((target) => fs.rm(target, { force: true })));
+  } catch {
+    // ignore temp pruning failures
+  }
+}
+
 async function writeJson(filePath: string, payload: unknown) {
   const run = async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await pruneFileTemps(filePath);
     const body = JSON.stringify(payload, null, 2);
     const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
     // Best-effort rolling backup for critical mutable stores.
@@ -403,17 +447,91 @@ async function writeJson(filePath: string, payload: unknown) {
       try {
         const bakPath = `${filePath}.bak.${Date.now()}`;
         await fs.copyFile(filePath, bakPath);
+        await pruneFileBackups(filePath);
       } catch {
         // ignore missing source or backup errors
       }
     }
-    await fs.writeFile(tmpPath, body, 'utf8');
-    await fs.rename(tmpPath, filePath);
+    try {
+      await fs.writeFile(tmpPath, body, 'utf8');
+      await fs.rename(tmpPath, filePath);
+    } finally {
+      await fs.rm(tmpPath, { force: true }).catch(() => {});
+    }
   };
   const prev = writeQueues.get(filePath) || Promise.resolve();
   const next = prev.then(run, run);
   writeQueues.set(filePath, next.catch(() => {}));
   await next;
+}
+
+type RequestPayloadRecord = {
+  outputEncrypted?: any;
+  outputProof?: any;
+};
+
+async function readRequestPayload(requestId: string): Promise<RequestPayloadRecord> {
+  if (!requestId) return {};
+  return readJson<RequestPayloadRecord>(path.join(requestPayloadsDir, `${requestId}.json`), {});
+}
+
+async function writeRequestPayload(requestId: string, payload: RequestPayloadRecord) {
+  if (!requestId) return;
+  await writeJson(path.join(requestPayloadsDir, `${requestId}.json`), payload);
+}
+
+async function hydrateRequestPayload(request: any) {
+  if (!request?.id) return request;
+  if (request.outputEncrypted && request.outputProof?.signature && request.outputProof?.merkleWitness) {
+    return request;
+  }
+  const sidecar = await readRequestPayload(String(request.id));
+  if (!sidecar.outputEncrypted && !sidecar.outputProof) {
+    return request;
+  }
+  return {
+    ...request,
+    outputEncrypted: request.outputEncrypted ?? sidecar.outputEncrypted ?? null,
+    outputProof: sidecar.outputProof ?? request.outputProof ?? null
+  };
+}
+
+async function compactRequestStore() {
+  const requestsStore = await readJson<{ requests: any[] }>(requestsPath, { requests: [] });
+  const requests = Array.isArray(requestsStore.requests) ? requestsStore.requests : [];
+  let changed = false;
+  await fs.mkdir(requestPayloadsDir, { recursive: true });
+  for (const request of requests) {
+    const payload: RequestPayloadRecord = {};
+    if (request?.outputEncrypted) {
+      payload.outputEncrypted = request.outputEncrypted;
+      delete request.outputEncrypted;
+      changed = true;
+    }
+    if (request?.outputProof?.signature || request?.outputProof?.merkleWitness) {
+      payload.outputProof = request.outputProof;
+      request.outputProof = {
+        requestHash: request.outputProof.requestHash ?? request.requestHash ?? null,
+        outputHash: request.outputProof.outputHash ?? null,
+        oraclePublicKey: request.outputProof.oraclePublicKey ?? null,
+        merkleRoot: request.outputProof.merkleRoot ?? null,
+        merkleIndex: request.outputProof.merkleIndex ?? null
+      };
+      changed = true;
+    }
+    if (request?.merkleWitness) {
+      delete request.merkleWitness;
+      changed = true;
+    }
+    if (Object.keys(payload).length > 0) {
+      const existing = await readRequestPayload(String(request.id));
+      await writeRequestPayload(String(request.id), { ...existing, ...payload });
+    }
+  }
+  if (changed) {
+    await writeJson(requestsPath, requestsStore);
+  }
+  return changed;
 }
 
 async function readCreditsLedger() {
@@ -3536,8 +3654,7 @@ async function createIntentCore(input: {
     requestHash: requestHash.toJSON(),
     agentIdHash: agentIdHash.toJSON(),
     merkleRoot: newRoot.toJSON(),
-    merkleIndex: index,
-    merkleWitness: witness
+    merkleIndex: index
   });
   await writeJson(requestsPath, requestsStore);
 
@@ -3585,23 +3702,24 @@ async function fulfillCore(input: {
   }
 
   if (request.status === 'FULFILLED') {
-    if (request.outputEncrypted) {
+    const hydrated = await hydrateRequestPayload(request);
+    if (hydrated.outputEncrypted) {
       const key = await getOutputEncryptionKey();
-      const decrypted = decryptPayload(request.outputEncrypted, key);
+      const decrypted = decryptPayload(hydrated.outputEncrypted, key);
       return {
         requestId,
-        agentId: request.agentId,
+        agentId: hydrated.agentId,
         output: decrypted,
-        status: request.status,
-        outputProof: request.outputProof
+        status: hydrated.status,
+        outputProof: hydrated.outputProof
       };
     }
     return {
       requestId,
-      agentId: request.agentId,
-      output: request.output,
-      status: request.status,
-      outputProof: request.outputProof
+      agentId: hydrated.agentId,
+      output: hydrated.output,
+      status: hydrated.status,
+      outputProof: hydrated.outputProof
     };
   }
 
@@ -3666,14 +3784,7 @@ async function fulfillCore(input: {
   if (creditTxHash) {
     request.creditTxHash = creditTxHash;
   }
-  request.output = null;
-  request.outputSummary = outputSummary;
-  request.outputEncrypted = encryptedOutput;
-  if (ipfsResult?.cid) {
-    request.outputCid = ipfsResult.cid;
-    request.outputGateway = ipfsResult.gateway;
-  }
-  request.outputProof = {
+  const fullOutputProof = {
     requestHash: request.requestHash,
     outputHash: outputHash.toJSON(),
     oraclePublicKey: oraclePk.toBase58(),
@@ -3682,8 +3793,26 @@ async function fulfillCore(input: {
     merkleIndex: outputCommit.index,
     merkleWitness: outputCommit.witness
   };
+
+  request.output = null;
+  request.outputSummary = outputSummary;
+  if (ipfsResult?.cid) {
+    request.outputCid = ipfsResult.cid;
+    request.outputGateway = ipfsResult.gateway;
+  }
+  request.outputProof = {
+    requestHash: request.requestHash,
+    outputHash: outputHash.toJSON(),
+    oraclePublicKey: oraclePk.toBase58(),
+    merkleRoot: outputCommit.newRoot.toJSON(),
+    merkleIndex: outputCommit.index
+  };
   request.fulfilledAt = new Date().toISOString();
 
+  await writeRequestPayload(request.id, {
+    outputEncrypted: encryptedOutput,
+    outputProof: fullOutputProof
+  });
   await writeJson(requestsPath, requestsStore);
 
   return {
@@ -3691,7 +3820,7 @@ async function fulfillCore(input: {
     agentId: request.agentId,
     output,
     status: request.status,
-    outputProof: request.outputProof,
+    outputProof: fullOutputProof,
     outputCid: ipfsResult?.cid || null,
     outputGateway: ipfsResult?.gateway || null
   };
@@ -4575,19 +4704,20 @@ app.get('/api/requests/:id', async (req, res) => {
   if (!hasToken) {
     const redacted = { ...request };
     redacted.output = null;
-    redacted.outputEncrypted = Boolean(request.outputEncrypted);
+    redacted.outputEncrypted = Boolean((await readRequestPayload(requestId)).outputEncrypted);
     return res.status(403).json({ error: 'Unauthorized', request: redacted });
   }
-  if (request.outputEncrypted) {
+  const hydrated = await hydrateRequestPayload(request);
+  if (hydrated.outputEncrypted) {
     try {
       const key = await getOutputEncryptionKey();
-      const decrypted = decryptPayload(request.outputEncrypted, key);
-      return res.json({ ...request, output: decrypted });
+      const decrypted = decryptPayload(hydrated.outputEncrypted, key);
+      return res.json({ ...hydrated, output: decrypted });
     } catch (err) {
       return res.status(500).json({ error: 'Failed to decrypt output' });
     }
   }
-  return res.json(request);
+  return res.json(hydrated);
 });
 
 app.post('/api/requests/:id/challenge', async (req, res) => {
@@ -4637,12 +4767,13 @@ app.post('/api/requests/:id/reveal', async (req, res) => {
     if (!valid) {
       return res.status(403).json({ error: 'Invalid signature' });
     }
-    if (request.outputEncrypted) {
+    const hydrated = await hydrateRequestPayload(request);
+    if (hydrated.outputEncrypted) {
       const key = await getOutputEncryptionKey();
-      const decrypted = decryptPayload(request.outputEncrypted, key);
-      return res.json({ ...request, output: decrypted });
+      const decrypted = decryptPayload(hydrated.outputEncrypted, key);
+      return res.json({ ...hydrated, output: decrypted });
     }
-    return res.json(request);
+    return res.json(hydrated);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Reveal failed';
     res.status(400).json({ error: message });
@@ -4665,6 +4796,10 @@ if (precompileZkapp) {
 (async () => {
   try {
     await ensureSeedData();
+    const compacted = await compactRequestStore();
+    if (compacted) {
+      console.log('[startup] compacted requests store into sidecar payload files');
+    }
     const migration = await mergeSeedRequests({ onlyIfMissingNonAlpha: true });
     if (migration.added > 0) {
       console.log(`[startup] merged ${migration.added} seeded requests for missing non-alpha history`);
