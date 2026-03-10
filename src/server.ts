@@ -172,6 +172,7 @@ const debugTxTiming = process.env.DEBUG_TX_TIMING === 'true';
 let txLock: Promise<void> = Promise.resolve();
 
 async function withTxLock<T>(fn: () => Promise<T>): Promise<T> {
+  const waitForTxContextToClear = () => new Promise((resolve) => setTimeout(resolve, 0));
   let release: () => void;
   const next = new Promise<void>((resolve) => {
     release = resolve;
@@ -180,8 +181,18 @@ async function withTxLock<T>(fn: () => Promise<T>): Promise<T> {
   txLock = prev.then(() => next);
   await prev;
   try {
-    return await fn();
+    try {
+      return await fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? '');
+      if (!message.includes('Cannot start new transaction within another transaction')) {
+        throw err;
+      }
+      await waitForTxContextToClear();
+      return await fn();
+    }
   } finally {
+    await waitForTxContextToClear();
     release!();
   }
 }
