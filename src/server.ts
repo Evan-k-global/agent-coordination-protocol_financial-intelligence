@@ -169,6 +169,7 @@ function verifySignedMessage(publicKeyBase58: string, signatureBase58: string, m
   return signature.verify(publicKey, fields).toBoolean();
 }
 let contractCompiled = false;
+let contractCompilePromise: Promise<void> | null = null;
 const precompileZkapp = process.env.PRECOMPILE_ZKAPP === 'true';
 const debugTxTiming = process.env.DEBUG_TX_TIMING === 'true';
 let txLock: Promise<void> = Promise.resolve();
@@ -1205,14 +1206,22 @@ async function getCurrentNullifierRoot() {
 }
 
 async function ensureContractCompiled() {
-  if (!contractCompiled) {
+  if (contractCompiled) return;
+  if (!contractCompilePromise) {
     const start = Date.now();
-    await AgentRequestContract.compile();
-    if (debugTxTiming) {
-      console.log(`Contract compiled in ${Date.now() - start}ms`);
-    }
-    contractCompiled = true;
+    contractCompilePromise = AgentRequestContract.compile()
+      .then(() => {
+        if (debugTxTiming) {
+          console.log(`Contract compiled in ${Date.now() - start}ms`);
+        }
+        contractCompiled = true;
+      })
+      .catch((err) => {
+        contractCompilePromise = null;
+        throw err;
+      });
   }
+  await contractCompilePromise;
 }
 
 function getOracleKey(): PrivateKey {
