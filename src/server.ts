@@ -173,8 +173,13 @@ const precompileZkapp = process.env.PRECOMPILE_ZKAPP === 'true';
 const debugTxTiming = process.env.DEBUG_TX_TIMING === 'true';
 let txLock: Promise<void> = Promise.resolve();
 
+function isNestedTxError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  return message.includes('Cannot start new transaction within another transaction');
+}
+
 async function withTxLock<T>(fn: () => Promise<T>): Promise<T> {
-  const waitForTxContextToClear = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const waitForTxContextToClear = (delayMs = 25) => new Promise((resolve) => setTimeout(resolve, delayMs));
   let release: () => void;
   const next = new Promise<void>((resolve) => {
     release = resolve;
@@ -183,18 +188,27 @@ async function withTxLock<T>(fn: () => Promise<T>): Promise<T> {
   txLock = prev.then(() => next);
   await prev;
   try {
-    try {
-      return await fn();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err ?? '');
-      if (!message.includes('Cannot start new transaction within another transaction')) {
-        throw err;
+    const retryDelays = [0, 50, 150, 300];
+    let lastError: unknown;
+    for (const delayMs of retryDelays) {
+      if (delayMs > 0) {
+        await waitForTxContextToClear(delayMs);
       }
-      await waitForTxContextToClear();
-      return await fn();
+      try {
+        return await fn();
+      } catch (err) {
+        if (!isNestedTxError(err)) {
+          throw err;
+        }
+        lastError = err;
+      }
     }
+    if (lastError) {
+      throw lastError;
+    }
+    throw new Error('Transaction builder failed without returning a result');
   } finally {
-    await waitForTxContextToClear();
+    await waitForTxContextToClear(50);
     release!();
   }
 }
@@ -4760,81 +4774,83 @@ app.post('/api/credits-spend-submit', async (req, res) => {
 
 app.post('/api/agent-stake-tx', async (req, res) => {
   try {
-    const { payload, feePayer } = req.body ?? {};
-    if (!feePayer || typeof feePayer !== 'string') {
-      throw new Error('Missing feePayer');
-    }
-    const network = getNetwork();
-    if (!network.graphql) {
-      throw new Error('ZEKO_GRAPHQL env var not set');
-    }
-    const zkappPrivateKey = getSecret('ZKAPP_PRIVATE_KEY');
-    const zkappPublicKey = getZkappPublicKey();
-    if (!zkappPublicKey || !zkappPrivateKey) {
-      throw new Error('ZKAPP_PUBLIC_KEY and ZKAPP_PRIVATE_KEY must be set');
-    }
-    const derived = PrivateKey.fromBase58(zkappPrivateKey).toPublicKey().toBase58();
-    if (derived !== zkappPublicKey) {
-      throw new Error(`ZKAPP_PRIVATE_KEY does not match ZKAPP_PUBLIC_KEY (derived ${derived})`);
-    }
+    const result = await withTxLock(async () => {
+      const { payload, feePayer } = req.body ?? {};
+      if (!feePayer || typeof feePayer !== 'string') {
+        throw new Error('Missing feePayer');
+      }
+      const network = getNetwork();
+      if (!network.graphql) {
+        throw new Error('ZEKO_GRAPHQL env var not set');
+      }
+      const zkappPrivateKey = getSecret('ZKAPP_PRIVATE_KEY');
+      const zkappPublicKey = getZkappPublicKey();
+      if (!zkappPublicKey || !zkappPrivateKey) {
+        throw new Error('ZKAPP_PUBLIC_KEY and ZKAPP_PRIVATE_KEY must be set');
+      }
+      const derived = PrivateKey.fromBase58(zkappPrivateKey).toPublicKey().toBase58();
+      if (derived !== zkappPublicKey) {
+        throw new Error(`ZKAPP_PRIVATE_KEY does not match ZKAPP_PUBLIC_KEY (derived ${derived})`);
+      }
 
-    await ensureContractCompiled();
-    const networkInstance = Mina.Network({
-      networkId: network.networkId as any,
-      mina: network.graphql,
-      archive: network.graphql
+      await ensureContractCompiled();
+      const networkInstance = Mina.Network({
+        networkId: network.networkId as any,
+        mina: network.graphql,
+        archive: network.graphql
+      });
+      Mina.setActiveInstance(networkInstance);
+
+      const { feeRaw, fee, source: feeSource } = await getSuggestedSequencerFee(network.graphql);
+      const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
+      const zkapp = new AgentRequestContract(zkappAddress);
+      const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
+      if (zkappAccount.error) {
+        throw new Error('ZkApp account not found on-chain');
+      }
+
+      const agentIdHash = Field.fromJSON(payload.agentIdHash);
+      const ownerHash = Field.fromJSON(payload.ownerHash);
+      const treasuryHash = Field.fromJSON(payload.treasuryHash);
+      const stakeAmountField = Field.fromJSON(payload.stakeAmount);
+      let oraclePk: PublicKey;
+      try {
+        oraclePk = PublicKey.fromBase58(payload.oraclePublicKey);
+      } catch {
+        throw new Error(`Invalid oraclePublicKey: ${redactKey(payload.oraclePublicKey)}`);
+      }
+      let signature: Signature;
+      try {
+        signature = Signature.fromJSON(payload.signature as any);
+      } catch {
+        throw new Error('Invalid signature payload (base58 parse failed)');
+      }
+      const newRoot = Field.fromJSON(payload.merkleRoot);
+
+      let feePayerPk: PublicKey;
+      try {
+        feePayerPk = PublicKey.fromBase58(feePayer);
+      } catch {
+        throw new Error(`Invalid feePayer public key: ${redactKey(feePayer)}`);
+      }
+
+      const tx = await Mina.transaction({ sender: feePayerPk, fee }, async () => {
+        await zkapp.registerAgent(agentIdHash, ownerHash, treasuryHash, stakeAmountField, oraclePk, signature, newRoot);
+      });
+
+      const feePayerUpdate = (tx as any).feePayer;
+      if (feePayerUpdate?.body?.preconditions?.account?.nonce) {
+        feePayerUpdate.body.preconditions.account.nonce = { isSome: Bool(false), value: UInt32.from(0) };
+      }
+      if (feePayerUpdate?.body) {
+        feePayerUpdate.body.useFullCommitment = Bool(true);
+      }
+
+      await tx.prove();
+      const txJson = tx.toJSON() as any;
+      return { tx: txJson, fee, feeRaw, feeSource, networkId: network.networkId };
     });
-    Mina.setActiveInstance(networkInstance);
-
-    const { feeRaw, fee, source: feeSource } = await getSuggestedSequencerFee(network.graphql);
-    const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
-    const zkapp = new AgentRequestContract(zkappAddress);
-    const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
-    if (zkappAccount.error) {
-      throw new Error('ZkApp account not found on-chain');
-    }
-
-    const agentIdHash = Field.fromJSON(payload.agentIdHash);
-    const ownerHash = Field.fromJSON(payload.ownerHash);
-    const treasuryHash = Field.fromJSON(payload.treasuryHash);
-    const stakeAmountField = Field.fromJSON(payload.stakeAmount);
-    let oraclePk: PublicKey;
-    try {
-      oraclePk = PublicKey.fromBase58(payload.oraclePublicKey);
-    } catch {
-      throw new Error(`Invalid oraclePublicKey: ${redactKey(payload.oraclePublicKey)}`);
-    }
-    let signature: Signature;
-    try {
-      signature = Signature.fromJSON(payload.signature as any);
-    } catch {
-      throw new Error('Invalid signature payload (base58 parse failed)');
-    }
-    const newRoot = Field.fromJSON(payload.merkleRoot);
-
-    let feePayerPk: PublicKey;
-    try {
-      feePayerPk = PublicKey.fromBase58(feePayer);
-    } catch {
-      throw new Error(`Invalid feePayer public key: ${redactKey(feePayer)}`);
-    }
-
-    const tx = await Mina.transaction({ sender: feePayerPk, fee }, async () => {
-      await zkapp.registerAgent(agentIdHash, ownerHash, treasuryHash, stakeAmountField, oraclePk, signature, newRoot);
-    });
-
-    // Non-magic fee payer handling: remove nonce precondition and require full commitment
-    const feePayerUpdate = (tx as any).feePayer;
-    if (feePayerUpdate?.body?.preconditions?.account?.nonce) {
-      feePayerUpdate.body.preconditions.account.nonce = { isSome: Bool(false), value: UInt32.from(0) };
-    }
-    if (feePayerUpdate?.body) {
-      feePayerUpdate.body.useFullCommitment = Bool(true);
-    }
-
-    await tx.prove();
-    const txJson = tx.toJSON() as any;
-    res.json({ tx: txJson, fee, feeRaw, feeSource, networkId: network.networkId });
+    res.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Agent stake transaction failed';
     res.status(400).json({ error: message });
