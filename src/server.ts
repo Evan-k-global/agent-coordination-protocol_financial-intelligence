@@ -61,6 +61,8 @@ const platformFeeMina = process.env.PLATFORM_FEE_MINA ? Number(process.env.PLATF
 const adminToken = process.env.ADMIN_TOKEN || '';
 const acpProtocol = 'acp';
 const acpVersion = '0.1';
+const modelQuoteTimeoutMs = Math.max(250, Number(process.env.MODEL_QUOTE_TIMEOUT_MS || 2000));
+const modelRequestTimeoutMs = Math.max(modelQuoteTimeoutMs, Number(process.env.MODEL_REQUEST_TIMEOUT_MS || 30000));
 
 function getRelayerPublicKey(): string | null {
   const sponsorKey = getSecret('SPONSOR_PRIVATE_KEY');
@@ -1230,6 +1232,99 @@ function getNetwork() {
   return { networkId, graphql };
 }
 
+function parseRawFeeInt(value: unknown): number | null {
+  const digits = String(value ?? '').trim();
+  if (!/^\d+$/.test(digits)) return null;
+  const parsed = Number.parseInt(digits, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function rawNanoToMinaString(value: number): string {
+  const whole = Math.floor(value / 1e9);
+  const frac = String(value % 1e9).padStart(9, '0').replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : String(whole);
+}
+
+async function graphqlRequest(query: string, variables: Record<string, unknown> = {}, graphqlUrl?: string | null) {
+  const url = graphqlUrl || getNetwork().graphql;
+  if (!url) throw new Error('ZEKO_GRAPHQL env var not set');
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ query, variables })
+  });
+  if (!res.ok) {
+    throw new Error(`graphql_http_${res.status}`);
+  }
+  const data = await res.json();
+  if (data?.errors?.length) {
+    throw new Error(data.errors[0]?.message || 'graphql_error');
+  }
+  return data?.data;
+}
+
+async function postJsonWithTimeout(
+  url: string,
+  payload: unknown,
+  headers: Record<string, string>,
+  timeoutMs: number
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getSuggestedSequencerFee(graphqlUrl?: string | null): Promise<{ feeRaw: string; fee: string; source: string }> {
+  const fallback = parseRawFeeInt(process.env.TX_FEE ?? '100000000') || 100000000;
+  try {
+    const data = await graphqlRequest(
+      `query {
+        pooledZkappCommands { feePayer { fee } }
+        pooledUserCommands { feePayer { fee } }
+      }`,
+      {},
+      graphqlUrl
+    );
+    const pooled = [
+      ...(Array.isArray(data?.pooledZkappCommands) ? data.pooledZkappCommands : []),
+      ...(Array.isArray(data?.pooledUserCommands) ? data.pooledUserCommands : [])
+    ];
+    const fees = pooled
+      .map((entry: any) => parseRawFeeInt(entry?.feePayer?.fee))
+      .filter((value): value is number => value !== null && Number.isFinite(value) && value > 0)
+      .sort((a, b) => a - b);
+    if (!fees.length) {
+      return {
+        feeRaw: String(fallback),
+        fee: rawNanoToMinaString(fallback),
+        source: 'configured-fallback'
+      };
+    }
+    const p75 = fees[Math.min(fees.length - 1, Math.floor(fees.length * 0.75))];
+    const suggested = Math.max(fallback, p75);
+    return {
+      feeRaw: String(suggested),
+      fee: rawNanoToMinaString(suggested),
+      source: 'sequencer-mempool-p75'
+    };
+  } catch {
+    return {
+      feeRaw: String(fallback),
+      fee: rawNanoToMinaString(fallback),
+      source: 'configured-fallback'
+    };
+  }
+}
+
 function computeLeaf(requestHash: Field, agentIdHash: Field): Field {
   return Poseidon.hash([requestHash, agentIdHash]);
 }
@@ -1308,7 +1403,7 @@ async function buildUnsignedTx(payload: {
   });
   Mina.setActiveInstance(networkInstance);
 
-  const fee = process.env.TX_FEE ?? '100000000';
+  const { feeRaw, fee, source: feeSource } = await getSuggestedSequencerFee(network.graphql);
   const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
   const zkapp = new AgentRequestContract(zkappAddress);
   const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
@@ -1388,7 +1483,7 @@ async function buildUnsignedTx(payload: {
   if (debugTxTiming) {
     console.log(`buildUnsignedTx total ${Date.now() - start}ms`);
   }
-  return { tx: txJson, fee, networkId: network.networkId };
+  return { tx: txJson, fee, feeRaw, feeSource, networkId: network.networkId };
   });
 }
 
@@ -1430,7 +1525,7 @@ async function buildAndSendRequestTxWithSponsor(payload: {
   });
   Mina.setActiveInstance(networkInstance);
 
-  const fee = process.env.TX_FEE ?? '100000000';
+  const { fee } = await getSuggestedSequencerFee(network.graphql);
   const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
   const zkapp = new AgentRequestContract(zkappAddress);
   const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
@@ -1540,7 +1635,7 @@ async function buildUnsignedOutputTx(payload: {
   });
   Mina.setActiveInstance(networkInstance);
 
-  const fee = process.env.TX_FEE ?? '100000000';
+  const { feeRaw, fee, source: feeSource } = await getSuggestedSequencerFee(network.graphql);
   const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
   const zkapp = new AgentRequestContract(zkappAddress);
   const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
@@ -1594,7 +1689,7 @@ async function buildUnsignedOutputTx(payload: {
   if (debugTxTiming) {
     console.log(`buildUnsignedOutputTx total ${Date.now() - start}ms`);
   }
-  return { tx: txJson, fee, networkId: network.networkId };
+  return { tx: txJson, fee, feeRaw, feeSource, networkId: network.networkId };
   });
 }
 
@@ -1634,7 +1729,7 @@ async function buildAndSendOutputTxWithSponsor(payload: {
   });
   Mina.setActiveInstance(networkInstance);
 
-  const fee = process.env.TX_FEE ?? '100000000';
+  const { feeRaw, fee, source: feeSource } = await getSuggestedSequencerFee(network.graphql);
   const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
   const zkapp = new AgentRequestContract(zkappAddress);
   const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
@@ -1727,7 +1822,7 @@ async function buildUnsignedCreditsTx(payload: {
   });
   Mina.setActiveInstance(networkInstance);
 
-  const fee = process.env.TX_FEE ?? '100000000';
+  const { feeRaw, fee, source: feeSource } = await getSuggestedSequencerFee(network.graphql);
   const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
   const zkapp = new AgentRequestContract(zkappAddress);
   const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
@@ -1823,7 +1918,7 @@ async function buildUnsignedCreditsTx(payload: {
 
   await tx.prove();
   const txJson = tx.toJSON() as any;
-  return { tx: txJson, fee, networkId: network.networkId };
+  return { tx: txJson, fee, feeRaw, feeSource, networkId: network.networkId };
   });
 }
 
@@ -1866,7 +1961,7 @@ async function buildAndSendCreditsTxWithSponsor(payload: {
   });
   Mina.setActiveInstance(networkInstance);
 
-  const fee = process.env.TX_FEE ?? '100000000';
+  const { feeRaw, fee, source: feeSource } = await getSuggestedSequencerFee(network.graphql);
   const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
   const zkapp = new AgentRequestContract(zkappAddress);
   const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
@@ -3633,11 +3728,16 @@ async function callExternalModel(agent: any, payload: any) {
   if (agent.modelAuth) {
     headers.Authorization = `Bearer ${agent.modelAuth}`;
   }
-  const res = await fetch(agent.modelEndpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload)
-  });
+  let res: Response;
+  try {
+    res = await postJsonWithTimeout(agent.modelEndpoint, payload, headers, modelRequestTimeoutMs);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err ?? 'unknown');
+    if (message.includes('aborted')) {
+      throw new Error(`Model endpoint timed out after ${modelRequestTimeoutMs}ms`);
+    }
+    throw err;
+  }
   if (!res.ok) {
     const error = await res.text();
     throw new Error(`Model endpoint failed: ${res.status} ${error}`);
@@ -3693,15 +3793,16 @@ async function createIntentCore(input: {
       if (agent.modelAuth) {
         headers.Authorization = `Bearer ${agent.modelAuth}`;
       }
-      const quoteRes = await fetch(agent.modelEndpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
+      const quoteRes = await postJsonWithTimeout(
+        agent.modelEndpoint,
+        {
           mode: 'price',
           agentId,
           prompt: sanitizedPrompt
-        })
-      });
+        },
+        headers,
+        modelQuoteTimeoutMs
+      );
       if (quoteRes.ok) {
         const quoteData = await quoteRes.json();
         const maybePrice = Number(quoteData?.priceMina ?? quoteData?.price);
@@ -4685,7 +4786,7 @@ app.post('/api/agent-stake-tx', async (req, res) => {
     });
     Mina.setActiveInstance(networkInstance);
 
-    const fee = process.env.TX_FEE ?? '100000000';
+    const { feeRaw, fee, source: feeSource } = await getSuggestedSequencerFee(network.graphql);
     const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
     const zkapp = new AgentRequestContract(zkappAddress);
     const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
@@ -4733,7 +4834,7 @@ app.post('/api/agent-stake-tx', async (req, res) => {
 
     await tx.prove();
     const txJson = tx.toJSON() as any;
-    res.json({ tx: txJson, fee, networkId: network.networkId });
+    res.json({ tx: txJson, fee, feeRaw, feeSource, networkId: network.networkId });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Agent stake transaction failed';
     res.status(400).json({ error: message });
