@@ -4882,7 +4882,7 @@ app.listen(port, () => {
 ensureMassiveFlatfilesFresh();
 ensureSymbolIndexFresh();
 if (precompileZkapp) {
-  ensureContractCompiled().catch((err) => {
+  withTxLock(() => ensureContractCompiled()).catch((err) => {
     console.warn('Precompile failed:', err instanceof Error ? err.message : err);
   });
 }
