@@ -4728,7 +4728,11 @@ app.post('/api/tx', async (req, res) => {
     const result = await buildUnsignedTx(payload, feePayer);
     res.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Transaction build failed';
+    const message = isNestedTxError(err)
+      ? '/api/tx nested transaction context leak'
+      : err instanceof Error
+        ? err.message
+        : 'Transaction build failed';
     res.status(400).json({ error: message });
   }
 });
@@ -4741,7 +4745,11 @@ app.post('/api/output-tx', async (req, res) => {
     const result = await buildUnsignedOutputTx(payload, feePayer);
     res.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Transaction build failed';
+    const message = isNestedTxError(err)
+      ? '/api/output-tx nested transaction context leak'
+      : err instanceof Error
+        ? err.message
+        : 'Transaction build failed';
     res.status(400).json({ error: message });
   }
 });
@@ -4753,7 +4761,11 @@ app.post('/api/credits-tx', async (req, res) => {
     const result = await buildUnsignedCreditsTx(payload, feePayer);
     res.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Credits transaction build failed';
+    const message = isNestedTxError(err)
+      ? '/api/credits-tx nested transaction context leak'
+      : err instanceof Error
+        ? err.message
+        : 'Credits transaction build failed';
     res.status(400).json({ error: message });
   }
 });
@@ -4764,7 +4776,11 @@ app.post('/api/output-attest-submit', async (req, res) => {
     const result = await buildAndSendOutputTxWithSponsor(payload);
     res.json({ hash: result.hash || 'submitted' });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Output attest submit failed';
+    const message = isNestedTxError(err)
+      ? '/api/output-attest-submit nested transaction context leak'
+      : err instanceof Error
+        ? err.message
+        : 'Output attest submit failed';
     res.status(400).json({ error: message });
   }
 });
@@ -4776,7 +4792,11 @@ app.post('/api/credits-spend-submit', async (req, res) => {
     res.json({ hash: result.hash || 'submitted' });
   } catch (err) {
     console.error('credits-spend-submit failed:', err);
-    const message = err instanceof Error ? err.message : 'Credits spend submit failed';
+    const message = isNestedTxError(err)
+      ? '/api/credits-spend-submit nested transaction context leak'
+      : err instanceof Error
+        ? err.message
+        : 'Credits spend submit failed';
     res.status(400).json({ error: message });
   }
 });
@@ -4861,7 +4881,11 @@ app.post('/api/agent-stake-tx', async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Agent stake transaction failed';
+    const message = isNestedTxError(err)
+      ? '/api/agent-stake-tx nested transaction context leak'
+      : err instanceof Error
+        ? err.message
+        : 'Agent stake transaction failed';
     res.status(400).json({ error: message });
   }
 });

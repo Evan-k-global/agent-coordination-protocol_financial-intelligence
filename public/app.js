@@ -58,6 +58,7 @@ let currentPage = 1;
 const pageSize = 6;
 let modelTestPassed = false;
 let requestInFlight = false;
+let attestInFlight = false;
 
 
 async function testModelEndpoint() {
@@ -678,6 +679,14 @@ attestOutputButton.addEventListener('click', async () => {
     alert('No output proof available yet.');
     return;
   }
+  if (attestInFlight) {
+    return;
+  }
+  attestInFlight = true;
+  if (attestOutputButton) {
+    attestOutputButton.disabled = true;
+  }
+  try {
   if (attestHint) {
     attestHint.textContent = 'Generating attestation transaction...';
   }
@@ -729,6 +738,12 @@ attestOutputButton.addEventListener('click', async () => {
   const hash = sent?.hash || 'submitted';
   if (attestHint) {
     attestHint.textContent = `Attestation submitted. Tx: ${hash}`;
+  }
+  } finally {
+    attestInFlight = false;
+    if (attestOutputButton) {
+      attestOutputButton.disabled = !lastOutputProof;
+    }
   }
 });
 
