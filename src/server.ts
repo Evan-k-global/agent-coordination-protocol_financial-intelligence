@@ -1483,7 +1483,7 @@ async function buildUnsignedTx(payload: {
   const amount = UInt64.from(amountNano);
   const platformFeeNano = BigInt(Math.round(Math.max(0, platformFeeMina) * 1e9));
   const platformFee = UInt64.from(platformFeeNano);
-  const tx = await Mina.transaction({ sender: feePayerPk, fee }, async () => {
+  const tx = await Mina.transaction({ sender: feePayerPk, fee: feeRaw }, async () => {
     const payment = AccountUpdate.createSigned(feePayerPk);
     payment.send({ to: treasuryPk, amount });
     if (platformPk && platformFeeNano > 0n) {
@@ -1548,7 +1548,7 @@ async function buildAndSendRequestTxWithSponsor(payload: {
   });
   Mina.setActiveInstance(networkInstance);
 
-  const { fee } = await getSuggestedSequencerFee(network.graphql);
+  const { feeRaw, fee } = await getSuggestedSequencerFee(network.graphql);
   const zkappAddress = PublicKey.fromBase58(zkappPublicKey);
   const zkapp = new AgentRequestContract(zkappAddress);
   const zkappAccount = await fetchAccount({ publicKey: zkappAddress });
@@ -1594,7 +1594,7 @@ async function buildAndSendRequestTxWithSponsor(payload: {
   const platformFeeNano = BigInt(Math.round(Math.max(0, platformFeeMina) * 1e9));
   const platformFee = UInt64.from(platformFeeNano);
 
-  const tx = await Mina.transaction({ sender: sponsorPk, fee }, async () => {
+  const tx = await Mina.transaction({ sender: sponsorPk, fee: feeRaw }, async () => {
     const payment = AccountUpdate.createSigned(sponsorPk);
     payment.send({ to: treasuryPk, amount });
     if (platformPk && platformFeeNano > 0n) {
@@ -1694,7 +1694,7 @@ async function buildUnsignedOutputTx(payload: {
   } catch {
     throw new Error(`Invalid feePayer public key: ${redactKey(feePayer)}`);
   }
-  const tx = await Mina.transaction({ sender: feePayerPk, fee }, async () => {
+  const tx = await Mina.transaction({ sender: feePayerPk, fee: feeRaw }, async () => {
     await zkapp.submitSignedOutput(requestHash, outputHash, oraclePk, signature, newRoot);
   });
 
@@ -1779,7 +1779,7 @@ async function buildAndSendOutputTxWithSponsor(payload: {
   }
   const newRoot = Field.fromJSON(payload.merkleRoot);
 
-  const tx = await Mina.transaction({ sender: sponsorPk, fee }, async () => {
+  const tx = await Mina.transaction({ sender: sponsorPk, fee: feeRaw }, async () => {
     await zkapp.submitSignedOutput(requestHash, outputHash, oraclePk, signature, newRoot);
   });
 
@@ -1904,7 +1904,7 @@ async function buildUnsignedCreditsTx(payload: {
       spendTo = null;
     }
   }
-  const tx = await Mina.transaction({ sender: feePayerPk, fee }, async () => {
+  const tx = await Mina.transaction({ sender: feePayerPk, fee: feeRaw }, async () => {
     if (depositMina > 0) {
       const amount = UInt64.from(BigInt(Math.round(depositMina * 1e9)));
       const payment = AccountUpdate.createSigned(feePayerPk);
@@ -2032,7 +2032,7 @@ async function buildAndSendCreditsTxWithSponsor(payload: {
     platformPk = sponsorPk;
   }
 
-  const tx = await Mina.transaction({ sender: sponsorPk, fee }, async () => {
+  const tx = await Mina.transaction({ sender: sponsorPk, fee: feeRaw }, async () => {
     if (spendTo && spendAmountMina > 0) {
       const spendAmount = UInt64.from(BigInt(Math.round(spendAmountMina * 1e9)));
       const platformAmount = UInt64.from(BigInt(Math.round(platformAmountMina * 1e9)));
@@ -4863,7 +4863,7 @@ app.post('/api/agent-stake-tx', async (req, res) => {
         throw new Error(`Invalid feePayer public key: ${redactKey(feePayer)}`);
       }
 
-      const tx = await Mina.transaction({ sender: feePayerPk, fee }, async () => {
+      const tx = await Mina.transaction({ sender: feePayerPk, fee: feeRaw }, async () => {
         await zkapp.registerAgent(agentIdHash, ownerHash, treasuryHash, stakeAmountField, oraclePk, signature, newRoot);
       });
 
